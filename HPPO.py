@@ -15,6 +15,14 @@ class ActorCritic(nn.Module):
                  output_size,
                  nonlinear
                  ):
+        """
+
+        :param input_size: the size of state
+        :param input_size_signal: the size of state_signal
+        :param hidden_size: the size of hidden layers [hidden_size[0], hidden_size[1], hidden_size[2]]
+        :param output_size: the size of output dimension
+        :param nonlinear: the nonlinear activation
+        """
         super().__init__()
 
         self.nonlinear = nn.ReLU() if nonlinear == 'relu' else nn.Tanh()
@@ -38,10 +46,26 @@ class ActorCritic(nn.Module):
             self.nonlinear,
             nn.Linear(hidden_size[1], hidden_size[2]),
             self.nonlinear,
-            nn.Linear(hidden_size[2], output_size)
+            nn.Linear(hidden_size[2], output_size),
+            nn.Softmax(dim=-1)
         )
 
+        # critic # TODO
 
-    def forward(self): # TODO
+    def dis_forward(self, signal_sequence, state):
+        """
+
+        :param signal_sequence: the information of signal sequence  (sequence_length, input_size_signal)
+        :param state: the ordinary information (observation) of the agent (and its neighbors)
+        :return:
+        """
+
+        out_put, (hn, cn) = self.rnn(signal_sequence)
+        h = self.linear(state)
+        x = self.actor_dis(torch.cat((hn.squeeze(), h), dim=-1))
+
+        return x
+
+
 
 
