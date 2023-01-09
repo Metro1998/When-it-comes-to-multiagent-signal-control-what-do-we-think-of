@@ -49,8 +49,8 @@ class Actor(nn.Module):
         )
 
         # actor_dis
-        self.rnn = nn.LSTM(input_size=state_space_signal, hidden_size=hidden_size[0] / 2)
-        self.linear = nn.Linear(state_sapce, hidden_size[0] / 2)
+        self.rnn = nn.LSTM(input_size=state_space_signal, hidden_size=hidden_size[0] // 2)
+        self.linear = nn.Linear(state_sapce, hidden_size[0] // 2)
         self.actor_dis = nn.Sequential(
             nn.Linear(hidden_size[0], hidden_size[1]),
             self.nonlinear,
@@ -60,11 +60,21 @@ class Actor(nn.Module):
             nn.Softmax(dim=-1)
         )
 
+        # orthogonal initialization
+        nn.init.orthogonal_(tensor=self.linear.weight, gain=np.sqrt(2))
+        nn.init.zeros_(tensor=self.linear.bias)
         for m in self.actor_dis.modules():
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(tensor=m.weight, gain=np.sqrt(2))
-
-
+                nn.init.zeros_(tensor=m.bias)
+        for m in self.actor_con.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(tensor=m.weight, gain=np.sqrt(2))
+                nn.init.zeros_(tensor=m.bias)
+        # Also, Andrychowicz, et al.(2021) find centering the action distribution around 0 (i.e., initialize the policy
+        # output layer weights with 0.01”) to be beneficial
+        nn.init.orthogonal_(tensor=self.actor_dis[-2].weight, gain=0.01)
+        nn.init.orthogonal_(tensor=self.actor_con[-1].weight, gain=0.01)
 
     def dis_forward(self, signal_sequence, state):
         """
@@ -101,6 +111,29 @@ class Actor(nn.Module):
 
         return action_dis, logprob_dis, action_con, logprob_con
 
+    def evluate_actions(self, signal_sequence, state, action_dis, action_con):
+        """
+        Compute log probability and entropy of given actions.
+        :param signal_sequence: the information of signal sequence  (sequence_length, state_space_signal)
+        :param state: the ordinary information (observation) of the agent (and its neighbors)
+        :param action_dis: the discrete action
+        :param action_con: the continuous action
+        :return:
+        """
+
+        action_probs = self.dis_forward(signal_sequence, state)
+        dist_dis = Categorical(action_probs)
+        logprob_dis = dist_dis.log_prob(action_dis)
+        dist_entropy_dis = dist_dis.entropy()
+
+        mean = self.actor_con(state)
+        std = torch.clamp(F.softplus(self.log_std), min=0.01, max=0.5)
+        dist_con = Normal(mean, std)
+        logprob_con = dist_con.log_prob(action_con)
+        dist_entropy_con = dist_con.entropy()
+
+        return logprob_dis, dist_entropy_dis, logprob_con, dist_entropy_con
+
 
 class Critic(nn.Module):
     def __init__(self,
@@ -129,7 +162,21 @@ class Critic(nn.Module):
             nn.Linear(hidden_size[2], 1)
         )
 
+        # orthogonal initialization
+        for m in self.critic.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(tensor=m.weight, gain=np.sqrt(2))
+                nn.init.zeros_(tensor=m.bias)
 
 
+if __name__ == "__main__":
+    actor = Actor(state_sapce=8,
+                  state_space_signal=8,
+                  hidden_size=[64, 32, 16],
+                  action_space=8,
+                  nonlinear='tanh',
+                  init_log_std=-0.4)
+    print(actor.actor_con)
 
-
+    for param in actor.actor_con.parameters():
+        print(param)
