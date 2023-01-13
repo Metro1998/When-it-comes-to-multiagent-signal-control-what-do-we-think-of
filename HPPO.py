@@ -1,9 +1,10 @@
 """
-Include basic neural network, buffer, and specific implementation of HPPO
+Include basic neural network, and specific implementation of HPPO
 Author:Metro
 date:2022.12.13
 """
 import numpy as np
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,21 +14,19 @@ from torch.distributions import Categorical
 
 class Actor(nn.Module):
     def __init__(self,
-                 state_sapce,
-                 state_space_signal,
+                 observation_space,
+                 observation_space_signal,
                  hidden_size,
                  action_space,
                  nonlinear,
                  init_log_std
                  ):
         """
-        Centeralized execution, that is, the agent_i output its hybrid action based on the global
-        state representation, but without other agents' policies.
-        Mask is considered to narrow the state space of actor, it is suggested agents far from the
-        target agent seldomly influence the latter one.
+        Distributed execution, that is, the agent_i output its hybrid action based on its own observation
+        without other agents' policies and global state representation.
 
-        :param state_sapce: the size of state
-        :param state_space_signal: the size of state_signal
+        :param observation_space: the size of state
+        :param observation_space_signal: the size of state_signal
         :param hidden_size: the size of hidden layers [hidden_size[0], hidden_size[1], hidden_size[2]]
         :param action_space: the size of output (discrete) dimension
         :param nonlinear: the nonlinear activation
@@ -39,7 +38,7 @@ class Actor(nn.Module):
 
         # actor_con
         self.actor_con = nn.Sequential(
-            nn.Linear(state_sapce, hidden_size[0]),
+            nn.Linear(observation_space, hidden_size[0]),
             self.nonlinear,
             nn.Linear(hidden_size[0], hidden_size[1]),
             self.nonlinear,
@@ -49,8 +48,8 @@ class Actor(nn.Module):
         )
 
         # actor_dis
-        self.rnn = nn.LSTM(input_size=state_space_signal, hidden_size=hidden_size[0] // 2)
-        self.linear = nn.Linear(state_sapce, hidden_size[0] // 2)
+        self.rnn = nn.LSTM(input_size=observation_space_signal, hidden_size=hidden_size[0] // 2)
+        self.linear = nn.Linear(observation_space, hidden_size[0] // 2)
         self.actor_dis = nn.Sequential(
             nn.Linear(hidden_size[0], hidden_size[1]),
             self.nonlinear,
@@ -169,9 +168,54 @@ class Critic(nn.Module):
                 nn.init.zeros_(tensor=m.bias)
 
 
+class PPO:
+    def __init__(self, actors, critic, rollout_buffer, epochs, mini_batch, clip_ratio, max_norm, coeff_entropy,
+                 random_seed, lr_actor_con, lr_actor_dis, lr_std, lr_critic, lr_decay_rate, target_kl_dis,
+                 target_kl_con, init_log_std, device):
+
+        self.random_seed = random_seed
+        self.actors = [a.to(device) for a in actors]
+        self.actors_old = [a.to(device) for a in actors]
+        self.critic = critic.to(device)
+
+        self.optimizer_actor_con = [torch.optim.Adam([
+            {'params': a.actor_con.parameters(), 'lr': lr_actor_con},
+            {'params': a.log_std, 'lr': lr_std}
+        ]) for a in self.actors]
+        self.optimizer_actor_dis = [torch.optim.Adam([
+            {'params': a.actor_dis.parameters(), 'lr': lr_actor_dis}
+        ]) for a in self.actors]
+        self.optimizer_critic = torch.optim.Adam(critic.parameters(), lr=lr_critic)
+
+        for _ in self.optimizer_actor_con:
+        self.lr_scheduler_actor_con = [torch.optim.lr_scheduler.ExponentialLR(optimizer=optim, gamma=lr_decay_rate)
+                                       for optim in self.optimizer_actor_con]
+        self.lr_scheduler_actor_dis = [torch.optim.lr_scheduler.ExponentialLR(optimizer=optim, gamma=lr_decay_rate)
+                                       for optim in self.optimizer_actor_dis]
+        self.lr_scheduler_critic = torch.optim.lr_scheduler.ExponentialLR(self.optimizer_critic, lr_decay_rate)
+
+        self.target_kl_dis = target_kl_dis
+        self.target_kl_con = target_kl_con
+
+    def set_random_seeds(self):
+        """
+        Sets all possible random seeds to results can be reproduces.
+        :param random_seed:
+        :return:
+        """
+        os.environ['PYTHONHASHSEED'] = str(self.random_seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.manual_seed(self.random_seed)
+        random.seed(self.random_seed)
+        np.random.seed(self.random_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_seed)
+            torch.cuda.manual_seed(self.random_seed)
+
 if __name__ == "__main__":
-    actor = Actor(state_sapce=8,
-                  state_space_signal=8,
+    actor = Actor(observation_space=8,
+                  observation_space_signal=8,
                   hidden_size=[64, 32, 16],
                   action_space=8,
                   nonlinear='tanh',
