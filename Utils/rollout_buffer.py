@@ -19,7 +19,7 @@ class PPOBuffer:
     """
 
     def __init__(self, num_steps, num_envs, num_agents, obs_dim, sequence_dim, act_dim, minus_inf, device):
-        self.obs_buf = np.zeros((num_steps, num_envs, num_agents, obs_dim), dtype=np.float32)
+        self.obs_buf = np.zeros((num_steps + 1, num_envs, num_agents, obs_dim), dtype=np.float32)
         # A buffer containing the history of signal before
         self.obs_sequence_buf = np.zeros((num_steps, num_envs, num_agents, sequence_dim), dtype=np.int64)
         self.act_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
@@ -38,7 +38,7 @@ class PPOBuffer:
         self.obs_dim, self.act_dim = obs_dim, act_dim
         self.ptr, self.path_start_dix, self.max_size = 0, 0, num_steps
 
-    def store_trajectories(self, obs, obs_sequence, act_dis, act_con, rew, val, logp_dis, logp_con, ptr):
+    def store_trajectories(self, obs, obs_sequence, act_dis, act_con, rew, val, logp_dis, logp_con):
         """
 `       Append one timestep of agent-environment interaction to the buffer.
         ### Inputs are batch of num_envs * num_agents ###
@@ -53,6 +53,9 @@ class PPOBuffer:
         self.rew_buf[self.ptr] = rew
         self.val_buf[self.ptr] = val
         self.ptr += 1
+
+    def finish_path(self, obs):
+        self.obs_buf[self.ptr] = obs
 
     # def compute_returns_and_advantages(self, last_val=0):
     #     """
@@ -77,37 +80,30 @@ class PPOBuffer:
 
     def get(self):
         """
-        Call this at the end of an epoch to reshape the whole buffer.
+        Call this at the end of a rollout round to retrieve the full infomation.
+        :return:
         """
         assert self.ptr == self.max_size  # buffer has to be full before you can get
-        # (num_steps, num_envs, num_agents, obs_dim) --> (num_agents, num_envs * num_steps, obs_dim)
-        # the trajectories of one env is complete
+        # (num_steps, num_envs, num_agents, obs_dim) --> (num_agents, num_envs, num_steps, obs_dim)
         obs_buf = self.obs_buf[:self.ptr].transpose(2, 1, 0, 3)
         obs_sequence_buf = self.obs_sequence_buf[:self.ptr].transpose(2, 1, 0, 3)
+        # (num_steps, num_envs, num_agents) --> (num_agents, num_envs, num_steps)
         flag_buf = self.flag_buf[:self.ptr].tranpose(2, 1, 0)
+        # if agent_i executes on the timestep_j, then it will get obs and obs_sequence, otherwise self.minus.
         obs_agent_buf = np.where(np.expand_dims(flag_buf, axis=-1), obs_buf, self.minus_inf)
         obs_sequence_agent_buf = np.where(np.expand_dims(flag_buf, axis=-1), obs_sequence_buf, self.minus_inf)
+        # Critic will get the centralized observation (num_envs, num_steps, num_agents * obs_dim),
+        # Sequence observation is not considered here.
+        cent_obs_buf = self.obs_buf[:self.ptr+1].transpose(1, 0, 2, 3).rehape(self.num_envs, self.num_steps+1, -1)
 
-        cent_obs_buf = self.obs_buf[:self.ptr].transpose(1, 0, 2, 3).rehape(self.num_envs, self.num_steps, -1)
-
-        # (num_steps, num_envs, num_agents) --> (num_agents, num_envs * num_steps)
         act_dis_buf = self.act_dis_buf[:self.ptr].transpose(2, 1, 0)
         act_con_buf = self.act_con_buf[:self.ptr].transpose(2, 1, 0, 3)
         logp_dis_buf = self.logp_dis_buf[:self.ptr].transpose(2, 1, 0)
         logp_con_buf = self.logp_con_buf[:self.ptr].transpose(2, 1, 0)
+        # Be the same with obs, reward will record all of the info, therefore to retrieve the reward for single agent,
+        # the filter is needed.
         rew_buf = self.rew_buf[:self.ptr].transpose(2, 1, 0)
         rew_agent_buf = np.where(flag_buf, rew_buf, self.minus_inf)
-        # adv_buf = self.adv_buf[:self.ptr].transpose(1, 2, 0).reshape(self.num_agents, -1)
-        # ret_buf = self.ret_buf[:self.ptr].transpose(1, 2, 0).reshape(self.num_agents, -1)
-
-        # the next lines implement the normalization trick
-        # obs_buf = (obs_buf - obs_buf.mean(axis=0)) / np.maximum(obs_buf.std(axis=0), 1e-6)
-        # note, we are conducting normalization on advantage not on reward
-        # adv_buf = (adv_buf - adv_buf.mean()) / np.maximum(adv_buf.std(), 1e-6)
-
-        # data = dict(obs=obs_buf, act_dis=act_dis_buf, act_con=act_con_buf, logp_dis=logp_dis_buf,
-        #             logp_con=logp_con_buf, adv=adv_buf, ret=ret_buf)
-        # return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
 
         return cent_obs_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf, rew_buf, rew_agent_buf, flag_buf
 

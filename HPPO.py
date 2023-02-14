@@ -226,7 +226,6 @@ class HAPPO:
     def set_random_seeds(self):
         """
         Sets all possible random seeds to results can be reproduces.
-        :param random_seed:
         :return:
         """
         os.environ['PYTHONHASHSEED'] = str(self.random_seed)
@@ -243,6 +242,8 @@ class HAPPO:
 
         cent_obs_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf, rew_buf, rew_agent_buf, flag_buf = self.buffer.get()
 
+        observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con = \
+            self.preprocess(obs_agent_buf, obs_sequence_agent_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf)
         for i in self.epochs:
             # Recompute values at the beginning of each epoch
             advantage, reward_to_go = self.recompute(cent_obs_buf, rew_agent_buf, flag_buf)
@@ -250,43 +251,55 @@ class HAPPO:
                 # mini_batch
 
     def recompute(self, cent_obs_buf, rew_agent_buf, flag_buf):
-        val_buf = self.critic(torch.from_numpy(cent_obs_buf)).sequence().detach().numpy()  # (num_envs, num_steps)
+        val_buf = self.critic(torch.from_numpy(cent_obs_buf)).sequence().detach().numpy()  # (num_envs, num_steps+1, cent_obs_dim) --> (num_envs, num_steps+1)
         advantage, reward_to_go = {}, {}
-        for i in rew_agent_buf.shape[0]:
-            advantage[str(i)], reward_to_go[str(i)] = [], []
-            for j in rew_agent_buf.shape[1]:
+        for i in rew_agent_buf.shape[0]: # num_agents
+            advantage[str(i)], reward_to_go[str(i)] = np.array([]), np.array([])
+            for j in rew_agent_buf.shape[1]: # num_envs
                 flag = flag_buf[i][j]
-                val = np.where(flag, val_buf[j], self.minus_inf)
-                val = val[val>self.minus_inf]
-                rew = rew_agent_buf[i][j]
-                rew = rew[rew>self.minus_inf]
+                val = val_buf[j][flag]
+                rew = rew_agent_buf[i][j][rew_agent_buf[i][j]>self.minus_inf]
+                rew = np.append(rew, values=0, axis=0) # Just fill up the space
                 delta = rew[:-1] + self.gamma * val[1:] - val[:-1]
-                advantage[str(i)].append(discount_cumsum(delta, self.gamma * self.lam))
-                reward_to_go[str(i)].append(discount_cumsum(rew, self.gamma)[:-1])
+                advantage[str(i)] = np.append(arr=advantage[str(i)], values=discount_cumsum(delta, self.gamma * self.lam))
+                reward_to_go[str(i)] = np.append(arr=reward_to_go[str(i)], values=discount_cumsum(rew, self.gamma)[:-1])
 
-        return advantage, reward_to_go
+        # Transfer from numpy.ndarry to torch.Tensor
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in advantage.items()}, \
+               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in reward_to_go.items()}
 
-    def preprocess(self, obs_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf):
-        observation, observation_agent, observation_sequence_agent, action_dis, action_con, ptr_con, old_logp_dis, old_logp_con = {}, {}, {}, {}, {}, {}, {}, {}
-        for i in obs_buf.shape[0]:
-            observation[str(i)], observation_agent[str(i)], observation_sequence_agent[str(i)], action_dis[str(i)], action_con[str(i)], ptr_con[str(i)], \
-            old_logp_dis[str(i)], old_logp_con[str(i)] = [], [], [], [], [], [], [], []
-            for j in obs_buf.shape[1]:
-                obs_agent, obs_sequence_agent, act_dis, act_con, lp_dis, lp_con = obs_agent_buf[i][j], obs_sequence_agent_buf[i][j], act_dis_buf[i][j], \
-                                                                                  act_con_buf[i][j],logp_dis_buf[i][j], logp_con_buf[i][j]
-                obs_agent = obs_agent[obs_agent>self.minus_inf].reshape(-1, self.obs_dim)
-                obs_sequence_agent = obs_sequence_agent[obs_sequence_agent>self.minus_inf].reshape(-1, self.sequence_dim)
-                act_dis = act_dis[act_dis>self.minus_inf]
-                act_con = act_con[act_con>self.minus_inf].reshape(-1, self.act_dim)
-                lp_dis = lp_dis[lp_dis>self.minus_inf]
-                lp_con = lp_con[lp_con>self.minus_inf]
+    def preprocess(self, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf):
+        """
 
-                observation_agent[str(i)].append(obs_agent[:-1])
-                observation_sequence_agent[str(i)].append(obs_sequence_agent[:-1])
-                action_dis[str(i)].append(act_dis[:-1])
-                action_con[str(i)].append(act_con[:-1])
-                old_logp_dis[str(i)].append(lp_dis[:-1])
-                old_logp_con[str(i)].append(lp_con[:-1])
+        :param obs_agent_buf:
+        :param obs_sequence_agent_buf:
+        :param act_dis_buf:
+        :param act_con_buf:
+        :param logp_dis_buf:
+        :param logp_con_buf:
+        :return:
+        """
+        observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con = {}, {}, {}, {}, {}, {}
+        for i in obs_agent_buf.shape[0]: # num_agent
+            # flags
+            flag_obs = obs_agent_buf[i] > self.minus_inf
+            flag_sequence_obs = obs_sequence_agent_buf[i] > self.minus_inf
+            flag_act_con = action_con[i] > self.minus_inf
+            flag = action_dis[i] > self.minus_inf
+
+            observation_agent[str(i)] = obs_agent_buf[i][flag_obs].reshape(-1, self.obs_dim)
+            observation_sequence_agent[str(i)] = obs_sequence_agent_buf[i][flag_sequence_obs].reshape(-1, self.sequence_dim)
+            action_dis[str(i)] = act_dis_buf[i][flag]
+            action_con[str(i)]= act_con_buf[i][flag_act_con].reshape(-1, self.act_dim)
+            old_logp_dis[str(i)] = logp_dis_buf[i][flag]
+            old_logp_con[str(i)] = logp_con_buf[i][flag]
+
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in observation_agent.items()}, \
+               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in observation_sequence_agent.items()}, \
+               {k: torch.as_tensor(v, dtype=torch.int32) for k,v in action_dis.items()}, \
+               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in action_con.items()}, \
+               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in old_logp_dis.items()}, \
+               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in old_logp_con.items()}
 
 
 
