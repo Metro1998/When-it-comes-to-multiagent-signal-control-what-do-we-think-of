@@ -12,6 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 from torch.distributions import Categorical
+from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from Utils.util import *
 
 
@@ -183,7 +184,7 @@ class Critic(nn.Module):
 
 
 class HAPPO:
-    def __init__(self, buffer, actors, critic, num_agents, rollout_buffer, epochs, mini_batch, clip_ratio, gamma, lam,
+    def __init__(self, buffer, actors, critic, num_agents, rollout_buffer, epochs, batch_size, clip_ratio, gamma, lam,
                  max_norm, coeff_entropy, random_seed, lr_actor_con, lr_actor_dis, lr_std, lr_critic, lr_decay_rate,
                  target_kl_dis, target_kl_con, init_log_std, minus_inf, obs_dim, sequence_dim, act_dim, device):
 
@@ -192,7 +193,7 @@ class HAPPO:
         self.actors_old = [a.to(device) for a in actors]
         self.critic = critic.to(device)
         self.random_seed = random_seed
-        self.mini_batch = mini_batch
+        self.batch_size = batch_size
         self.epochs = epochs
         self.gamma = gamma
         self.lam = lam
@@ -200,6 +201,7 @@ class HAPPO:
         self.obs_dim = obs_dim
         self.sequence_dim = sequence_dim
         self.act_dim = act_dim
+        self.device = device
 
         # to offer a random permutation
         self.permutation = np.arange(num_agents)
@@ -244,11 +246,34 @@ class HAPPO:
 
         observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con = \
             self.preprocess(obs_agent_buf, obs_sequence_agent_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf)
+
         for i in self.epochs:
             # Recompute values at the beginning of each epoch
             advantage, reward_to_go = self.recompute(cent_obs_buf, rew_agent_buf, flag_buf)
+
+            # Retrieve mini_batch
+            sampler = {}
             for j in self.permutation:
-                # mini_batch
+                sampler[str(j)] = list(BatchSampler(
+                    sampler=SubsetRandomSampler(advantage[str(j)].size()[-1]),
+                    batch_size=self.batch_size,
+                    drop_last=True))
+            num_batch = min([len(v) for k, v in sampler.items()])
+            for k in range(num_batch):
+                for j in self.permutation:
+                    adv_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    ret_batch = torch.as_tensor(reward_to_go[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    obs_batch = torch.as_tensor(observation_agent[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    obs_sequence_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    act_dis_batch = torch.as_tensor(action_dis[str(j)][sampler[str(j)][k]], dtype=torch.float64, device=self.device)
+                    act_con_batch = torch.as_tensor(action_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    logp_dis_batch = torch.as_tensor(old_logp_dis[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    logp_con_batch = torch.as_tensor(old_logp_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+
+
+
+
+
 
     def recompute(self, cent_obs_buf, rew_agent_buf, flag_buf):
         val_buf = self.critic(torch.from_numpy(cent_obs_buf)).sequence().detach().numpy()  # (num_envs, num_steps+1, cent_obs_dim) --> (num_envs, num_steps+1)
@@ -265,8 +290,7 @@ class HAPPO:
                 reward_to_go[str(i)] = np.append(arr=reward_to_go[str(i)], values=discount_cumsum(rew, self.gamma)[:-1])
 
         # Transfer from numpy.ndarry to torch.Tensor
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in advantage.items()}, \
-               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in reward_to_go.items()}
+        return advantage, reward_to_go
 
     def preprocess(self, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf):
         """
@@ -294,12 +318,7 @@ class HAPPO:
             old_logp_dis[str(i)] = logp_dis_buf[i][flag]
             old_logp_con[str(i)] = logp_con_buf[i][flag]
 
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in observation_agent.items()}, \
-               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in observation_sequence_agent.items()}, \
-               {k: torch.as_tensor(v, dtype=torch.int32) for k,v in action_dis.items()}, \
-               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in action_con.items()}, \
-               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in old_logp_dis.items()}, \
-               {k: torch.as_tensor(v, dtype=torch.float32) for k,v in old_logp_con.items()}
+        return observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con
 
 
 
