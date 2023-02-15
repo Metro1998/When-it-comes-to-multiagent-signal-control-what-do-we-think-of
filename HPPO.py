@@ -193,19 +193,22 @@ class HAPPO:
         self.actors_old = [a.to(device) for a in actors]
         self.critic = critic.to(device)
         self.random_seed = random_seed
+        self.clip_ratio = clip_ratio
         self.batch_size = batch_size
         self.epochs = epochs
         self.gamma = gamma
         self.lam = lam
+        self.max_norm = max_norm
         self.minus_inf = minus_inf
         self.obs_dim = obs_dim
         self.sequence_dim = sequence_dim
         self.act_dim = act_dim
         self.device = device
+        self.num_agents = num_agents
 
         # to offer a random permutation
         self.permutation = np.arange(num_agents)
-        np.random.shuffle(self.permutation)
+        np.random.shuffle(self.permutation)  # TODO
 
         self.optimizer_actor_con = [torch.optim.Adam([
             {'params': a.actor_con.parameters(), 'lr': lr_actor_con},
@@ -225,6 +228,8 @@ class HAPPO:
         self.target_kl_dis = target_kl_dis
         self.target_kl_con = target_kl_con
 
+        self.loss_func = nn.SmoothL1Loss(reduction='mean')
+
     def set_random_seeds(self):
         """
         Sets all possible random seeds to results can be reproduces.
@@ -242,57 +247,77 @@ class HAPPO:
 
     def update(self):
 
-        cent_obs_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf, rew_buf, rew_agent_buf, flag_buf = self.buffer.get()
+        cent_obs_buf, rew_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf = self.buffer.get()
 
-        observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con = \
-            self.preprocess(obs_agent_buf, obs_sequence_agent_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf)
+        obs_agent, obs_sequence_agent, act_dis, act_con, old_logp_dis, old_logp_con, cent_obs, ret = \
+            self.preprocess(obs_agent_buf, obs_sequence_agent_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf, cent_obs_buf, rew_buf)
 
         for i in self.epochs:
             # Recompute values at the beginning of each epoch
-            advantage, reward_to_go = self.recompute(cent_obs_buf, rew_agent_buf, flag_buf)
+            advantage = self.recompute(cent_obs_buf, rew_buf)
+            # Normalization
+            advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
 
-            # Retrieve mini_batch
+            # Update global critic
+            sampler_critic = list(BatchSampler(
+                    sampler=SubsetRandomSampler(cent_obs.shape[0]),
+                    batch_size=self.batch_size,
+                    drop_last=True))
+            for indices in sampler_critic:
+                cent_obs_batch = torch.as_tensor(cent_obs[indices], dtype=torch.float32, device=self.device)
+                ret_batch = torch.as_tensor(ret[indices], dtype=torch.float32, device=self.device)
+                critic_loss = self.compute_critic_loss(cent_obs_batch, ret_batch)
+
+                critic_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), norm_type=2, max_norm=self.max_norm)
+                self.optimizer_critic.step()
+
+            # Update actors
+
+            # Retrieve the mini_batch_num, since the number of available batchs of each agent will be different
             sampler = {}
             for j in self.permutation:
                 sampler[str(j)] = list(BatchSampler(
-                    sampler=SubsetRandomSampler(advantage[str(j)].size()[-1]),
+                    sampler=SubsetRandomSampler(advantage[str(j)].shape[-1]),
                     batch_size=self.batch_size,
                     drop_last=True))
-            num_batch = min([len(v) for k, v in sampler.items()])
-            for k in range(num_batch):
+            mini_batch_num = min([len(v) for k, v in sampler.items()])
+
+            for k in range(mini_batch_num):
                 for j in self.permutation:
-                    adv_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    ret_batch = torch.as_tensor(reward_to_go[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    obs_batch = torch.as_tensor(observation_agent[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    obs_batch = torch.as_tensor(obs_agent[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
                     obs_sequence_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    act_dis_batch = torch.as_tensor(action_dis[str(j)][sampler[str(j)][k]], dtype=torch.float64, device=self.device)
-                    act_con_batch = torch.as_tensor(action_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    act_dis_batch = torch.as_tensor(act_dis[str(j)][sampler[str(j)][k]], dtype=torch.int64, device=self.device)
+                    act_con_batch = torch.as_tensor(act_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
                     logp_dis_batch = torch.as_tensor(old_logp_dis[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
                     logp_con_batch = torch.as_tensor(old_logp_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
 
+    def recompute(self, cent_obs_buf, rew_buf):
+        """
+        Compute advantage function A(s, a) based on global V-value network with GAE, where a represent joint action
 
+        :param cent_obs_buf:
+        :param rew_buf:
+        :return:
+        """
 
+        # (num_envs, num_steps, cent_obs_dim) --> (num_envs, num_steps)
+        val_buf = self.critic(torch.from_numpy(cent_obs_buf)).sequence().detach().numpy()
+        # (num_envs, num_steps, num_agents) --> (num_envs, num_steps)
+        rew_buf = np.sum(rew_buf, axis=-1)
 
+        advantage, reward_to_go = np.array([]), np.array([])
+        for i in val_buf.shape[0]:  # num_envs
+            val = val_buf[i]
+            rew = rew_buf[i]
 
+            # the next two lines implement GAE-Lambda advantage calculation
+            delta = rew[:-1] + self.gamma * val[1:] - val[:-1]
+            advantage = np.append(advantage, discount_cumsum(delta, self.gamma * self.lam))
 
-    def recompute(self, cent_obs_buf, rew_agent_buf, flag_buf):
-        val_buf = self.critic(torch.from_numpy(cent_obs_buf)).sequence().detach().numpy()  # (num_envs, num_steps+1, cent_obs_dim) --> (num_envs, num_steps+1)
-        advantage, reward_to_go = {}, {}
-        for i in rew_agent_buf.shape[0]: # num_agents
-            advantage[str(i)], reward_to_go[str(i)] = np.array([]), np.array([])
-            for j in rew_agent_buf.shape[1]: # num_envs
-                flag = flag_buf[i][j]
-                val = val_buf[j][flag]
-                rew = rew_agent_buf[i][j][rew_agent_buf[i][j]>self.minus_inf]
-                rew = np.append(rew, values=0, axis=0) # Just fill up the space
-                delta = rew[:-1] + self.gamma * val[1:] - val[:-1]
-                advantage[str(i)] = np.append(arr=advantage[str(i)], values=discount_cumsum(delta, self.gamma * self.lam))
-                reward_to_go[str(i)] = np.append(arr=reward_to_go[str(i)], values=discount_cumsum(rew, self.gamma)[:-1])
+        return advantage
 
-        # Transfer from numpy.ndarry to torch.Tensor
-        return advantage, reward_to_go
-
-    def preprocess(self, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf):
+    def preprocess(self, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf, cent_obs_buf, rew_buf):
         """
 
         :param obs_agent_buf:
@@ -304,7 +329,7 @@ class HAPPO:
         :return:
         """
         observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con = {}, {}, {}, {}, {}, {}
-        for i in obs_agent_buf.shape[0]: # num_agent
+        for i in obs_agent_buf.shape[0]:  # num_agent
             # flags
             flag_obs = obs_agent_buf[i] > self.minus_inf
             flag_sequence_obs = obs_sequence_agent_buf[i] > self.minus_inf
@@ -314,39 +339,57 @@ class HAPPO:
             observation_agent[str(i)] = obs_agent_buf[i][flag_obs].reshape(-1, self.obs_dim)
             observation_sequence_agent[str(i)] = obs_sequence_agent_buf[i][flag_sequence_obs].reshape(-1, self.sequence_dim)
             action_dis[str(i)] = act_dis_buf[i][flag]
-            action_con[str(i)]= act_con_buf[i][flag_act_con].reshape(-1, self.act_dim)
+            action_con[str(i)] = act_con_buf[i][flag_act_con].reshape(-1, self.act_dim)
             old_logp_dis[str(i)] = logp_dis_buf[i][flag]
             old_logp_con[str(i)] = logp_con_buf[i][flag]
 
-        return observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con
+        # (num_envs, num_steps, num_agents) --> (num_envs, num_steps)
+        rew_buf = np.sum(rew_buf, axis=-1)
+        centralized_observation, reward_to_go = np.array([]), np.array([])
+        for i in rew_buf.shape[0]:  # num_envs
+            cent_obs = centralized_observation[i]
+            rew = rew_buf[i]
 
+            centralized_observation = np.append(centralized_observation, cent_obs[:-1])
+            # the next line computes rewards-to-go, to be targets for the value function
+            reward_to_go = np.append(reward_to_go, discount_cumsum(rew, self.gamma)[:-1])
 
+        return observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con, centralized_observation, reward_to_go
 
-
-
-
-
-
-
-
-
-
-
-
-
-    @staticmethod
-    def cal_value_loss(values, return_batch):
+    def compute_critic_loss(self, cent_obs_batch, ret_batch):
         """
-        Calculate value function loss.
 
-        :param values:
-        :param return_batch:
+        :param cent_obs_batch:
+        :param ret_batch:
         :return:
         """
+        state_values = self.critic(cent_obs_batch)
 
-        value_loss = 0.5 * ((return_batch - values) ** 2).mean()
+        return self.loss_func(state_values, ret_batch)
 
-        return value_loss
+    def compute_actor_loss(self, obs_batch, obs_sequence_batch, act_dis_batch, act_con_batch, old_logp_dis, old_logp_con, actor, adv_targ):
+        """
+
+        :param obs_batch:
+        :param obs_sequence_batch:
+        :param act_dis_batch:
+        :param act_con_batch:
+        :param old_logp_dis:
+        :param old_logp_con:
+        :return:
+        """
+        logp_dis, entropy_dis, logp_con, entropy_con = actor.evaluate_actions(obs_batch, obs_sequence_batch, act_dis_batch, act_con_batch)
+        logp_con = logp_con.gather(1, act_dis_batch.view(-1, 1)).squeeze()
+        imp_weights_dis = torch.prod(torch.exp(logp_dis - old_logp_dis), dim=-1, keepdim=True)
+        imp_weights_con = torch.prod(torch.exp(logp_con - old_logp_con), dim=-1, keepdim=True)
+        surr1_dis = imp_weights_dis * adv_targ
+        surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_targ
+        surr1_dis = imp_weights_con * adv_targ
+        surr2_dis = torch.clamp(imp_weights_con, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_targ
+
+        # 基本思路要改变，也就是说在每个step上 obs 和 adv都是有的，那么现在的目标是在这些step上面batch 然后针对某个step（肯定有智能体行动）进行更新， 不过大概率只有一个智能体，这时候不就退化成IPPO？
+
+
 
 
 if __name__ == "__main__":
