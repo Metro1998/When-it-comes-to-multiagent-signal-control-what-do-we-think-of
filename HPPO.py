@@ -185,7 +185,7 @@ class Critic(nn.Module):
 
 class HAPPO:
     def __init__(self, buffer, actors, critic, num_agents, rollout_buffer, epochs, batch_size, clip_ratio, gamma, lam,
-                 max_norm, coeff_entropy, random_seed, lr_actor_con, lr_actor_dis, lr_std, lr_critic, lr_decay_rate,
+                 max_norm, coeff_entropy_dis, coeff_entropy_con, random_seed, lr_actor_con, lr_actor_dis, lr_std, lr_critic, lr_decay_rate,
                  target_kl_dis, target_kl_con, init_log_std, minus_inf, obs_dim, sequence_dim, act_dim, device):
 
         self.buffer = rollout_buffer
@@ -205,6 +205,8 @@ class HAPPO:
         self.act_dim = act_dim
         self.device = device
         self.num_agents = num_agents
+        self.coeff_entropy_dis = coeff_entropy_dis
+        self.coeff_entropy_con = coeff_entropy_con
 
         # to offer a random permutation
         self.permutation = np.arange(num_agents)
@@ -247,10 +249,11 @@ class HAPPO:
 
     def update(self):
 
-        cent_obs_buf, rew_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf = self.buffer.get()
+        cent_obs_buf, rew_buf, obs_queue_buf, obs_signal_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf = self.buffer.get()
 
-        obs_agent, obs_sequence_agent, act_dis, act_con, old_logp_dis, old_logp_con, cent_obs, ret = \
-            self.preprocess(obs_agent_buf, obs_sequence_agent_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf, cent_obs_buf, rew_buf)
+        obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic, state_batch, ret = \
+            self.preprocess(obs_queue_buf, obs_signal_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf,
+                            cent_obs_buf, rew_buf)
 
         for i in self.epochs:
             # Recompute values at the beginning of each epoch
@@ -260,13 +263,13 @@ class HAPPO:
 
             # Update global critic
             sampler_critic = list(BatchSampler(
-                    sampler=SubsetRandomSampler(cent_obs.shape[0]),
-                    batch_size=self.batch_size,
-                    drop_last=True))
+                sampler=SubsetRandomSampler(state_batch.shape[0]),
+                batch_size=self.batch_size,
+                drop_last=True))
             for indices in sampler_critic:
-                cent_obs_batch = torch.as_tensor(cent_obs[indices], dtype=torch.float32, device=self.device)
+                state_batch = torch.as_tensor(state_batch[indices], dtype=torch.float32, device=self.device)
                 ret_batch = torch.as_tensor(ret[indices], dtype=torch.float32, device=self.device)
-                critic_loss = self.compute_critic_loss(cent_obs_batch, ret_batch)
+                critic_loss = self.compute_critic_loss(state_batch, ret_batch)
 
                 critic_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), norm_type=2, max_norm=self.max_norm)
@@ -285,12 +288,18 @@ class HAPPO:
 
             for k in range(mini_batch_num):
                 for j in self.permutation:
-                    obs_batch = torch.as_tensor(obs_agent[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    obs_sequence_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    act_dis_batch = torch.as_tensor(act_dis[str(j)][sampler[str(j)][k]], dtype=torch.int64, device=self.device)
-                    act_con_batch = torch.as_tensor(act_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    logp_dis_batch = torch.as_tensor(old_logp_dis[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
-                    logp_con_batch = torch.as_tensor(old_logp_con[str(j)][sampler[str(j)][k]], dtype=torch.float32, device=self.device)
+                    obs_batch = torch.as_tensor(obs_agent[str(j)][sampler[str(j)][k]], dtype=torch.float32,
+                                                device=self.device)
+                    obs_sequence_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32,
+                                                         device=self.device)
+                    act_dis_batch = torch.as_tensor(act_dis[str(j)][sampler[str(j)][k]], dtype=torch.int64,
+                                                    device=self.device)
+                    act_con_batch = torch.as_tensor(act_con[str(j)][sampler[str(j)][k]], dtype=torch.float32,
+                                                    device=self.device)
+                    logp_dis_batch = torch.as_tensor(old_logp_dis[str(j)][sampler[str(j)][k]], dtype=torch.float32,
+                                                     device=self.device)
+                    logp_con_batch = torch.as_tensor(old_logp_con[str(j)][sampler[str(j)][k]], dtype=torch.float32,
+                                                     device=self.device)
 
     def recompute(self, cent_obs_buf, rew_buf):
         """
@@ -317,79 +326,82 @@ class HAPPO:
 
         return advantage
 
-    def preprocess(self, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf, cent_obs_buf, rew_buf):
+    def preprocess(self, obs_queue_buf, obs_signal_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf,
+                   cent_obs_buf, rew_buf):
         """
 
-        :param obs_agent_buf:
-        :param obs_sequence_agent_buf:
+        :param obs_queue_buf:
+        :param obs_signal_buf:
         :param act_dis_buf:
         :param act_con_buf:
         :param logp_dis_buf:
         :param logp_con_buf:
+        :param cent_obs_buf:
+        :param rew_buf:
         :return:
         """
-        observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con = {}, {}, {}, {}, {}, {}
-        for i in obs_agent_buf.shape[0]:  # num_agent
-            # flags
-            flag_obs = obs_agent_buf[i] > self.minus_inf
-            flag_sequence_obs = obs_sequence_agent_buf[i] > self.minus_inf
-            flag_act_con = action_con[i] > self.minus_inf
-            flag = action_dis[i] > self.minus_inf
+        obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic = {}, {}, {}, {}, {}, {}
+        for i in obs_queue_buf.shape[0]: # num_agents
+            obs_queue_dic[str(i)] = obs_queue_buf[i][:, :-1].flatten().reshape(-1, self.obs_dim)
+            obs_signal_dic[str(i)] = obs_signal_buf[i][:, :-1].flatten().reshape(-1, self.sequence_dim)
+            act_dis_dic[str(i)] = act_dis_buf[i][:, :-1].flatten()
+            act_con_dic[str(i)] = act_con_buf[i][:, :-1].flatten().reshape(-1, self.act_dim)
+            old_logp_dis_dic[str(i)] = logp_dis_buf[i][:, :-1].flatten()
+            old_logp_con_dic[str(i)] = logp_con_buf[i][:, :-1].flatten()
 
-            observation_agent[str(i)] = obs_agent_buf[i][flag_obs].reshape(-1, self.obs_dim)
-            observation_sequence_agent[str(i)] = obs_sequence_agent_buf[i][flag_sequence_obs].reshape(-1, self.sequence_dim)
-            action_dis[str(i)] = act_dis_buf[i][flag]
-            action_con[str(i)] = act_con_buf[i][flag_act_con].reshape(-1, self.act_dim)
-            old_logp_dis[str(i)] = logp_dis_buf[i][flag]
-            old_logp_con[str(i)] = logp_con_buf[i][flag]
-
-        # (num_envs, num_steps, num_agents) --> (num_envs, num_steps)
         rew_buf = np.sum(rew_buf, axis=-1)
-        centralized_observation, reward_to_go = np.array([]), np.array([])
+        state, ret = np.array([]), np.array([])
         for i in rew_buf.shape[0]:  # num_envs
-            cent_obs = centralized_observation[i]
+            cent_obs = cent_obs_buf[i]
             rew = rew_buf[i]
 
-            centralized_observation = np.append(centralized_observation, cent_obs[:-1])
+            state = np.append(state, cent_obs[:-1])
             # the next line computes rewards-to-go, to be targets for the value function
-            reward_to_go = np.append(reward_to_go, discount_cumsum(rew, self.gamma)[:-1])
+            ret = np.append(ret, discount_cumsum(rew, self.gamma)[:-1])
 
-        return observation_agent, observation_sequence_agent, action_dis, action_con, old_logp_dis, old_logp_con, centralized_observation, reward_to_go
+        return obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic, state, ret
 
-    def compute_critic_loss(self, cent_obs_batch, ret_batch):
+    def compute_critic_loss(self, state_batch, ret_batch):
         """
 
-        :param cent_obs_batch:
+        :param state_batch:
         :param ret_batch:
         :return:
         """
-        state_values = self.critic(cent_obs_batch)
-
+        state_values = self.critic(state_batch)
         return self.loss_func(state_values, ret_batch)
 
-    def compute_actor_loss(self, obs_batch, obs_sequence_batch, act_dis_batch, act_con_batch, old_logp_dis, old_logp_con, actor, adv_targ):
+    def compute_actor_loss(self, obs_queue_batch, obs_signal_batch, act_dis_batch, act_con_batch, old_logp_dis_batch,
+                           old_logp_con_batch, actor, adv_target_dis, adv_target_con):
         """
 
-        :param obs_batch:
-        :param obs_sequence_batch:
+        :param obs_queue_batch:
+        :param obs_signal_batch:
         :param act_dis_batch:
         :param act_con_batch:
-        :param old_logp_dis:
-        :param old_logp_con:
+        :param old_logp_dis_batch:
+        :param old_logp_con_batch:
+        :param actor:
+        :param adv_target_dis:
+        :param adv_target_con:
         :return:
         """
-        logp_dis, entropy_dis, logp_con, entropy_con = actor.evaluate_actions(obs_batch, obs_sequence_batch, act_dis_batch, act_con_batch)
+        logp_dis, entropy_dis, logp_con, entropy_con = actor.evaluate_actions(obs_queue_batch, obs_signal_batch,
+                                                                              act_dis_batch, act_con_batch)
         logp_con = logp_con.gather(1, act_dis_batch.view(-1, 1)).squeeze()
-        imp_weights_dis = torch.prod(torch.exp(logp_dis - old_logp_dis), dim=-1, keepdim=True)
-        imp_weights_con = torch.prod(torch.exp(logp_con - old_logp_con), dim=-1, keepdim=True)
-        surr1_dis = imp_weights_dis * adv_targ
-        surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_targ
-        surr1_dis = imp_weights_con * adv_targ
-        surr2_dis = torch.clamp(imp_weights_con, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_targ
+        imp_weights_dis = torch.prod(torch.exp(logp_dis - old_logp_dis_batch), dim=-1, keepdim=True)
+        imp_weights_con = torch.prod(torch.exp(logp_con - old_logp_con_batch), dim=-1, keepdim=True)
+        surr1_dis = imp_weights_dis * adv_target_dis
+        surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_target_dis
+        surr1_con = imp_weights_con * adv_target_con
+        surr2_con = torch.clamp(imp_weights_con, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_target_con
+        loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.coeff_entropy_dis * entropy_dis).mean()
+        loss_pi_con = - (torch.min(surr1_con, surr2_con) + self.coeff_entropy_con * entropy_con).mean()
 
-        # 基本思路要改变，也就是说在每个step上 obs 和 adv都是有的，那么现在的目标是在这些step上面batch 然后针对某个step（肯定有智能体行动）进行更新， 不过大概率只有一个智能体，这时候不就退化成IPPO？
+        adv_target_dis *= imp_weights_dis
+        adv_target_con *= imp_weights_con
 
-
+        return loss_pi_dis, loss_pi_con, adv_target_dis, adv_target_con
 
 
 if __name__ == "__main__":

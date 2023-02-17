@@ -19,9 +19,11 @@ class PPOBuffer:
     """
 
     def __init__(self, num_steps, num_envs, num_agents, obs_dim, sequence_dim, act_dim, minus_inf, device):
-        self.obs_buf = np.zeros((num_steps, num_envs, num_agents, obs_dim), dtype=np.float32)
+        self.obs_queue_buf = np.zeros((num_steps, num_envs, num_agents, obs_dim), dtype=np.float32)
         # A buffer containing the history of signal before
-        self.obs_sequence_buf = np.zeros((num_steps, num_envs, num_agents, sequence_dim), dtype=np.int64)
+        self.obs_signal_buf = np.zeros((num_steps, num_envs, num_agents, sequence_dim), dtype=np.float32)
+        # On its own step, the action and its corresponding logp is dervived from its model,
+        # while on other steps, the action is inferred and the logp is calculated based on the distribution.
         self.act_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
         self.act_con_buf = np.zeros((num_steps, num_envs, num_agents, act_dim), dtype=np.float32)
         self.logp_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
@@ -31,8 +33,6 @@ class PPOBuffer:
         self.ret_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.val_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         # to indicate whether one specific agent is on its atomic timestep
-        self.flag_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
-        self.minus_inf = minus_inf
         self.device = device
         self.num_steps, self.num_envs, self.num_agents = num_steps, num_envs, num_agents
         self.obs_dim, self.act_dim = obs_dim, act_dim
@@ -44,8 +44,8 @@ class PPOBuffer:
         ### Inputs are batch of num_envs * num_agents ###
         """
         assert self.ptr < self.max_size
-        self.obs_buf[self.ptr] = obs
-        self.obs_sequence_buf[self.ptr] = obs_sequence
+        self.obs_queue_buf[self.ptr] = obs
+        self.obs_signal_buf[self.ptr] = obs_sequence
         self.act_dis_buf[self.ptr] = act_dis
         self.act_con_buf[self.ptr] = act_con
         self.logp_dis_buf[self.ptr] = logp_dis
@@ -82,35 +82,29 @@ class PPOBuffer:
         """
         assert self.ptr == self.max_size  # buffer has to be full before you can get
 
-        # Critic will get the centralized observation,
-        # Sequence observation is not considered here.
+        # Critic will get the centralized observation, and signal sequence observation is not considered here.
         # (num_steps, num_envs, num_agents, obs_dim) --> (num_envs, num_steps, num_agents * obs_dim)
-        cent_obs_buf = self.obs_buf[:self.ptr].transpose(1, 0, 2, 3).rehape(self.num_envs, self.num_steps, -1)
+        cent_obs_buf = self.obs_queue_buf[:self.ptr].transpose(1, 0, 2, 3).rehape(self.num_envs, self.num_steps, -1)
         # (num_steps, num_envs, num_agents) --> --> (num_envs, num_steps, num_agents)
         rew_buf = self.rew_buf[:self.ptr].transpose(1, 0, 2)
 
+        # Actor makes the decision based on its own queue and signal sequence obervation.
         # (num_steps, num_envs, num_agents, obs_dim) --> (num_agents, num_envs, num_steps, obs_dim)
-        obs_buf = self.obs_buf[:self.ptr].transpose(2, 1, 0, 3)
-        obs_sequence_buf = self.obs_sequence_buf[:self.ptr].transpose(2, 1, 0, 3)
-        # (num_steps, num_envs, num_agents) --> (num_agents, num_envs, num_steps)
-        # if agent_i executes on the timestep_j, then it will get obs and obs_sequence, otherwise self.minus.
-        flag_buf = self.flag_buf[:self.ptr].tranpose(2, 1, 0)
-
-        obs_agent_buf = np.where(np.expand_dims(flag_buf, axis=-1), obs_buf, self.minus_inf)
-        obs_sequence_agent_buf = np.where(np.expand_dims(flag_buf, axis=-1), obs_sequence_buf, self.minus_inf)
+        obs_queue_buf = self.obs_queue_buf[:self.ptr].transpose(2, 1, 0, 3)
+        obs_signal_buf = self.obs_signal_buf[:self.ptr].transpose(2, 1, 0, 3)
         act_dis_buf = self.act_dis_buf[:self.ptr].transpose(2, 1, 0)
         act_con_buf = self.act_con_buf[:self.ptr].transpose(2, 1, 0, 3)
         logp_dis_buf = self.logp_dis_buf[:self.ptr].transpose(2, 1, 0)
         logp_con_buf = self.logp_con_buf[:self.ptr].transpose(2, 1, 0)
 
-        return cent_obs_buf, rew_buf, obs_agent_buf, obs_sequence_agent_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf
+        return cent_obs_buf, rew_buf, obs_queue_buf, obs_signal_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf
 
     def filter(self):
         """
         Get the obs's mean and std for next update cycle.
         :return:
         """
-        obs = self.obs_buf[:self.ptr]
+        obs = self.obs_queue_buf[:self.ptr]
 
         return obs.mean(axis=0), obs.std(axis=0)
 
@@ -133,7 +127,7 @@ if __name__ == "__main__":
     print(buffer.active_buf.shape)
     buffer.active_buf = np.reshape(buffer.active_buf, (2, 4, 3, 1))
     print(buffer.active_buf)
-    buffer.obs_buf = np.array([
+    buffer.obs_queue_buf = np.array([
         [
             [[1.2, 2.1], [1.5, 1.7], [1.5, 1.7]],
             [[1.2, 2.1], [1.5, 1.7], [1.5, 1.7]],
@@ -147,7 +141,7 @@ if __name__ == "__main__":
             [[1.2, 2.1], [1.5, 1.7], [1.5, 1.7]]
         ]
     ])
-    buffer.obs_buf = buffer.active_buf * buffer.obs_buf
+    buffer.obs_queue_buf = buffer.active_buf * buffer.obs_queue_buf
 
-    tmp = np.reshape(buffer.obs_buf, (-1, 2))
+    tmp = np.reshape(buffer.obs_queue_buf, (-1, 2))
     print(tmp)
