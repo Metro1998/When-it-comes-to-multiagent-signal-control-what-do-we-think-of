@@ -114,28 +114,35 @@ class Actor(nn.Module):
 
         return action_dis, logprob_dis, action_con, logprob_con
 
-    def evaluate_actions(self, obs, obs_signal, action_dis, action_con):
+    def evaluate_action_dis(self, obs, obs_signal, action_dis):
         """
         Compute log probability and entropy of given actions.
         :param obs: the ordinary information (observation) of the agent (and its neighbors)
         :param obs_signal: the information of signal sequence  (sequence_length, state_space_signal)
         :param action_dis: the discrete action
-        :param action_con: the continuous action
         :return:
         """
-
         action_probs = self.dis_forward(obs, obs_signal)
         dist_dis = Categorical(action_probs)
         logprob_dis = dist_dis.log_prob(action_dis)
         dist_entropy_dis = dist_dis.entropy()
 
+        return logprob_dis, dist_entropy_dis
+
+    def evaluate_action_con(self, obs, action_con):
+        """
+        Compute log probability and entropy of given actions.
+        :param obs: the ordinary information (observation) of the agent (and its neighbors)
+        :param action_con: the continuous action
+        :return:
+        """
         mean = self.actor_con(obs)
         std = torch.clamp(F.softplus(self.log_std), min=0.01, max=0.5)
         dist_con = Normal(mean, std)
         logprob_con = dist_con.log_prob(action_con)
         dist_entropy_con = dist_con.entropy()
 
-        return logprob_dis, dist_entropy_dis, logprob_con, dist_entropy_con
+        return logprob_con, dist_entropy_con
 
 
 class Critic(nn.Module):
@@ -186,7 +193,7 @@ class Critic(nn.Module):
 class HAPPO:
     def __init__(self, buffer, actors, critic, num_agents, rollout_buffer, epochs, batch_size, clip_ratio, gamma, lam,
                  max_norm, coeff_entropy_dis, coeff_entropy_con, random_seed, lr_actor_con, lr_actor_dis, lr_std, lr_critic, lr_decay_rate,
-                 target_kl_dis, target_kl_con, init_log_std, minus_inf, obs_dim, sequence_dim, act_dim, device):
+                 target_kl_dis, target_kl_con, queue_dim, signal_dim, act_dim, device):
 
         self.buffer = rollout_buffer
         self.actors = [a.to(device) for a in actors]
@@ -199,9 +206,8 @@ class HAPPO:
         self.gamma = gamma
         self.lam = lam
         self.max_norm = max_norm
-        self.minus_inf = minus_inf
-        self.obs_dim = obs_dim
-        self.sequence_dim = sequence_dim
+        self.queue_dim = queue_dim
+        self.signal_dim = signal_dim
         self.act_dim = act_dim
         self.device = device
         self.num_agents = num_agents
@@ -251,9 +257,11 @@ class HAPPO:
 
         cent_obs_buf, rew_buf, obs_queue_buf, obs_signal_buf, act_dis_buf, act_con_buf, logp_dis_buf, logp_con_buf = self.buffer.get()
 
-        obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic, state_batch, ret = \
+        obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic, state, ret = \
             self.preprocess(obs_queue_buf, obs_signal_buf, act_con_buf, act_dis_buf, logp_dis_buf, logp_con_buf,
                             cent_obs_buf, rew_buf)
+
+        update_dis_actor, update_con_actor = 1, 1
 
         for i in self.epochs:
             # Recompute values at the beginning of each epoch
@@ -263,43 +271,58 @@ class HAPPO:
 
             # Update global critic
             sampler_critic = list(BatchSampler(
-                sampler=SubsetRandomSampler(state_batch.shape[0]),
+                sampler=SubsetRandomSampler(state.shape[0]),
                 batch_size=self.batch_size,
                 drop_last=True))
             for indices in sampler_critic:
-                state_batch = torch.as_tensor(state_batch[indices], dtype=torch.float32, device=self.device)
+                state_batch = torch.as_tensor(state[indices], dtype=torch.float32, device=self.device)
                 ret_batch = torch.as_tensor(ret[indices], dtype=torch.float32, device=self.device)
-                critic_loss = self.compute_critic_loss(state_batch, ret_batch)
 
+                # Update gloable critic
+                self.optimizer_critic.zero_grad()
+                critic_loss = self.compute_critic_loss(state_batch, ret_batch)
                 critic_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), norm_type=2, max_norm=self.max_norm)
                 self.optimizer_critic.step()
 
-            # Update actors
+                adv_batch_dis = torch.as_tensor(advantage[indices], dtype=torch.float32, device=self.device)
+                adv_batch_con = adv_batch_dis
+                # Update actors
+                if update_dis_actor:
+                    for j in self.permutation:
+                        obs_queue_batch = torch.as_tensor(obs_queue_dic[str(j)], dtype=torch.float32, device=self.device)
+                        obs_signal_batch = torch.as_tensor(obs_signal_dic[str(j)], dtype=torch.float32, device=self.device)
+                        act_dis_batch = torch.as_tensor(act_dis_dic[str(j)], dtype=torch.int64, device=self.device)
+                        old_logp_dis_batch = torch.as_tensor(old_logp_dis_dic[str(j)], dtype=torch.float32, device=self.device)
 
-            # Retrieve the mini_batch_num, since the number of available batchs of each agent will be different
-            sampler = {}
-            for j in self.permutation:
-                sampler[str(j)] = list(BatchSampler(
-                    sampler=SubsetRandomSampler(advantage[str(j)].shape[-1]),
-                    batch_size=self.batch_size,
-                    drop_last=True))
-            mini_batch_num = min([len(v) for k, v in sampler.items()])
+                        actor_loss_dis, adv_batch_dis, approx_kl_dis = \
+                            self.compute_actor_dis_loss(obs_queue_batch, obs_signal_batch, act_dis_batch, old_logp_dis_batch, self.actors[j], adv_batch_dis)
 
-            for k in range(mini_batch_num):
-                for j in self.permutation:
-                    obs_batch = torch.as_tensor(obs_agent[str(j)][sampler[str(j)][k]], dtype=torch.float32,
-                                                device=self.device)
-                    obs_sequence_batch = torch.as_tensor(advantage[str(j)][sampler[str(j)][k]], dtype=torch.float32,
-                                                         device=self.device)
-                    act_dis_batch = torch.as_tensor(act_dis[str(j)][sampler[str(j)][k]], dtype=torch.int64,
-                                                    device=self.device)
-                    act_con_batch = torch.as_tensor(act_con[str(j)][sampler[str(j)][k]], dtype=torch.float32,
-                                                    device=self.device)
-                    logp_dis_batch = torch.as_tensor(old_logp_dis[str(j)][sampler[str(j)][k]], dtype=torch.float32,
-                                                     device=self.device)
-                    logp_con_batch = torch.as_tensor(old_logp_con[str(j)][sampler[str(j)][k]], dtype=torch.float32,
-                                                     device=self.device)
+                        self.optimizer_actor_dis[j].zero_grad()
+                        actor_loss_dis.backward()
+                        torch.nn.utils.clip_grad_norm_(self.optimizer_actor_dis[j], norm_type=2, max_norm=self.max_norm)
+                        self.optimizer_actor_dis[j].step()
+
+                if update_con_actor:
+                    for j in self.permutation:
+                        obs_queue_batch = torch.as_tensor(obs_queue_dic[str(j)], dtype=torch.float32, device=self.device)
+                        act_dis_batch = torch.as_tensor(act_dis_dic[str(j)], dtype=torch.int64, device=self.device)
+                        act_con_batch = torch.as_tensor(act_con_dic[str(j)], dtype=torch.float32, device=self.device)
+                        old_logp_con_batch = torch.as_tensor(old_logp_con_dic[str(j)], dtype=torch.float32, device=self.device)
+
+                        actor_loss_con, adv_batch_con, approx_kl_con = \
+                            self.compute_actor_con_loss(obs_queue_batch, act_dis_batch, act_con_batch, old_logp_con_batch, self.actors[j], adv_batch_con)
+
+                        self.optimizer_actor_con[j].zero_grad()
+                        actor_loss_con.backward()
+                        torch.nn.utils.clip_grad_norm_(self.optimizer_actor_con[j], norm_type=2,
+                                                       max_norm=self.max_norm)
+                        self.optimizer_actor_con[j].step()
+
+            if approx_kl_dis > self.target_kl_dis:
+                update_dis_actor = 0
+            if approx_kl_con > self.target_kl_con:
+                update_con_actor = 0
 
     def recompute(self, cent_obs_buf, rew_buf):
         """
@@ -342,8 +365,8 @@ class HAPPO:
         """
         obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic = {}, {}, {}, {}, {}, {}
         for i in obs_queue_buf.shape[0]: # num_agents
-            obs_queue_dic[str(i)] = obs_queue_buf[i][:, :-1].flatten().reshape(-1, self.obs_dim)
-            obs_signal_dic[str(i)] = obs_signal_buf[i][:, :-1].flatten().reshape(-1, self.sequence_dim)
+            obs_queue_dic[str(i)] = obs_queue_buf[i][:, :-1].flatten().reshape(-1, self.queue_dim)
+            obs_signal_dic[str(i)] = obs_signal_buf[i][:, :-1].flatten().reshape(-1, self.signal_dim)
             act_dis_dic[str(i)] = act_dis_buf[i][:, :-1].flatten()
             act_con_dic[str(i)] = act_con_buf[i][:, :-1].flatten().reshape(-1, self.act_dim)
             old_logp_dis_dic[str(i)] = logp_dis_buf[i][:, :-1].flatten()
@@ -371,37 +394,57 @@ class HAPPO:
         state_values = self.critic(state_batch)
         return self.loss_func(state_values, ret_batch)
 
-    def compute_actor_loss(self, obs_queue_batch, obs_signal_batch, act_dis_batch, act_con_batch, old_logp_dis_batch,
-                           old_logp_con_batch, actor, adv_target_dis, adv_target_con):
+    def compute_actor_dis_loss(self, obs_queue_batch, obs_signal_batch, act_dis_batch, old_logp_dis_batch, actor, adv_target_dis):
         """
 
         :param obs_queue_batch:
         :param obs_signal_batch:
         :param act_dis_batch:
-        :param act_con_batch:
         :param old_logp_dis_batch:
-        :param old_logp_con_batch:
         :param actor:
         :param adv_target_dis:
+        :return:
+        """
+        logp_dis, entropy_dis = actor.evaluate_action_dis(obs_queue_batch, obs_signal_batch, act_dis_batch)
+        imp_weights_dis = torch.exp(logp_dis - old_logp_dis_batch)
+        surr1_dis = imp_weights_dis * adv_target_dis
+        surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_target_dis
+        loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.coeff_entropy_dis * entropy_dis).mean()
+
+        adv_target_dis *= imp_weights_dis
+        with torch.no_grad():
+            # calculate approx_kl http://joschu.net/blog/kl-approx.html
+            approx_kl_dis = ((imp_weights_dis - 1) - (logp_dis - old_logp_dis_batch)).mean()
+
+        return loss_pi_dis, adv_target_dis, approx_kl_dis
+
+    def compute_actor_con_loss(self, obs_queue_batch, act_dis_batch, act_con_batch, old_logp_con_batch, actor, adv_target_con):
+        """
+
+        :param obs_queue_batch:
+        :param act_dis_batch:
+        :param act_con_batch:
+        :param old_logp_con_batch:
+        :param actor:
         :param adv_target_con:
         :return:
         """
-        logp_dis, entropy_dis, logp_con, entropy_con = actor.evaluate_actions(obs_queue_batch, obs_signal_batch,
-                                                                              act_dis_batch, act_con_batch)
+        logp_con, entropy_con = actor.evaluate_action_dis(obs_queue_batch, act_con_batch)
         logp_con = logp_con.gather(1, act_dis_batch.view(-1, 1)).squeeze()
-        imp_weights_dis = torch.prod(torch.exp(logp_dis - old_logp_dis_batch), dim=-1, keepdim=True)
-        imp_weights_con = torch.prod(torch.exp(logp_con - old_logp_con_batch), dim=-1, keepdim=True)
-        surr1_dis = imp_weights_dis * adv_target_dis
-        surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_target_dis
+        imp_weights_con = torch.exp(logp_con - old_logp_con_batch)
         surr1_con = imp_weights_con * adv_target_con
         surr2_con = torch.clamp(imp_weights_con, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_target_con
-        loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.coeff_entropy_dis * entropy_dis).mean()
-        loss_pi_con = - (torch.min(surr1_con, surr2_con) + self.coeff_entropy_con * entropy_con).mean()
 
-        adv_target_dis *= imp_weights_dis
+        # Andrychowicz, et al. (2021) overall find no evidence that the entropy term improves performance on
+        # continuous control environments.
+        loss_pi_con = - torch.min(surr1_con, surr2_con).mean()
+
         adv_target_con *= imp_weights_con
+        with torch.no_grad():
+            # calculate approx_kl http://joschu.net/blog/kl-approx.html
+            approx_kl_con = ((imp_weights_con - 1) - (logp_con - old_logp_con_batch)).mean()
 
-        return loss_pi_dis, loss_pi_con, adv_target_dis, adv_target_con
+        return loss_pi_con, adv_target_con, approx_kl_con
 
 
 if __name__ == "__main__":
