@@ -40,7 +40,7 @@ class SelfAttention(nn.Module):
 
     def forward(self, key, value, query):
         B, L, D = query.size()
-        # B: batch_size, L: sequence_length, D: embedding_dim
+        # B: batch_size, L: sequence_length, D: embd_dim
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         k = self.key(key).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
@@ -76,7 +76,7 @@ class EncodeBlock(nn.Module):
         self.attn = SelfAttention(embd_dim, head_num, agent_num, masked=False)
         self.mlp = nn.Sequential(
             init_(nn.Linear(embd_dim, 1 * embd_dim), activate=True),
-            nn.GeLU(),  # TODO
+            nn.GELU(),  # TODO
             init_(nn.Linear(1 * embd_dim, embd_dim))
         )
 
@@ -115,7 +115,7 @@ class Encoder(nn.Module):
     def __init__(self, obs_dim, block_num, embd_dim, head_num, agent_num):
         super(Encoder, self).__init__()
 
-        self.obs_dim  = obs_dim
+        self.obs_dim = obs_dim
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
@@ -136,23 +136,31 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, obs_dim, action_dim, embedding_dim, block_num, head_num, agent_num, init_log_std):
+    def __init__(self, obs_dim, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std, action_type):
         super(Decoder, self).__init__()
 
         self.action_dim = action_dim
-        self.embedding_dim = embedding_dim
+        self.embd_dim = embd_dim
+        self.action_type = action_type
 
-        log_std = torch.zeros(action_dim, ) + init_log_std
-        self.log_std = nn.Parameter(log_std)
+        if action_type != 'Discrete':
+            self.log_std = nn.Parameter(torch.zeros(action_dim, ) + init_log_std)
 
-        self.action_encoder_dis = nn.Sequential(init_(nn.Linear(action_dim + 1, embedding_dim, bias=False), activate=True),
-                                            nn.GELU())
-        self.action_encoder_con = nn.Sequential(init_(nn.Linear(action_dim, embedding_dim), activate=True), nn.GELU())
-        self.ln = nn.LayerNorm(embedding_dim)
-        self.blocks = nn.Sequential(*[DecodeBlock(embedding_dim, head_num, agent_num) for _ in range(block_num)])
-        self.head = nn.Sequential(init_(nn.Linear(embedding_dim, embedding_dim), activate=True), nn.GELU(), nn.LayerNorm(embedding_dim),
-                                  init_(nn.Linear(embedding_dim, action_dim)))
+        if action_type == 'Discrete':
+            self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 1, embd_dim, bias=False), activate=True), nn.GELU())
+        else:
+            self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim, embd_dim), activate=True), nn.GELU())
+        self.ln = nn.LayerNorm(embd_dim)
+        self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
+                                  nn.LayerNorm(embd_dim),
+                                  init_(nn.Linear(embd_dim, action_dim)))
 
-    def forward(self, action, obs_rep):
+    def forward(self, act, obs_rep):
+        action_embeddings = self.action_encoder(act)
+        x = self.ln(action_embeddings)
+        for block in self.blocks:
+            x = block(x, obs_rep)
+        logit = self.head(x)
 
-
+        return logit
