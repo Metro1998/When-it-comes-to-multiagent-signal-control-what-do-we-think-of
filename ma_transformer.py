@@ -1,9 +1,11 @@
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
 import math
 import numpy as np
+import torch
+import torch.nn as nn
+
+from torch.nn import functional as F
 from torch.distributions import Categorical
+from Utils.util import *
 
 """
 reference: 
@@ -42,7 +44,7 @@ class SelfAttention(nn.Module):
         B, L, D = query.size()
         # B: batch_size, L: sequence_length, D: embd_dim
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        # calculate query, key, values for all heads in batch and move head evaluate_actions to be the batch dim
         k = self.key(key).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
         q = self.query(query).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
         v = self.value(value).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
@@ -164,3 +166,96 @@ class Decoder(nn.Module):
         logit = self.head(x)
 
         return logit
+
+
+class MultiAgentTransformer(nn.Module):
+
+    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, init_log_std, available_action):
+        """
+
+        :param obs_dim:
+        :param action_dim:
+        :param embd_dim:
+        :param agent_num:
+        :param block_num:
+        :param head_num:
+        :param init_log_std:
+        :param available_action: (np.ndarray) (batch_size, agent_num, action_dim)
+        """
+        super(MultiAgentTransformer, self).__init__()
+
+        self.agent_num = agent_num
+        self.action_dim = action_dim
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.available_action = check(available_action).to(self.device)
+
+        self.encoder = Encoder(obs_dim, block_num, embd_dim, head_num, agent_num)
+        # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
+        # each other, so are they in MAT.
+        self.decoder_dis = Decoder(obs_dim, action_dim, embd_dim, block_num, head_num, agent_num, None, "Discrete")
+        self.decoder_con = Decoder(obs_dim, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std, "Continuous")
+
+        self.to(self.device)
+
+    def evaluate_actions(self, obs, act_dis, act_con):
+        """
+        Get action logprobs / entropy for actor update.
+        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
+        :param act_dis: (np.ndarray) (batch_size, agent_num, 1)
+        :param act_con: (np.ndarray) (batch_size, agent_num, action_dim)
+        :return:
+        """
+
+        batch_size = obs.shape[0]
+        obs = check(obs).to(self.device)
+        act_dis = check(act_dis).to(device=self.device, dtype=torch.int64)
+        act_con = check(act_con).to(self.device)
+
+        v_glob, obs_rep = self.encoder(obs)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num,
+                                                                          self.action_dim, act_dis, act_con, self.device, self.available_actions)
+
+        return act_log_dis, entropy_dis, act_log_con, entropy_con
+
+    def get_actions(self, obs):
+        """
+        Compute actions and value function predictions for the given inputs.
+        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
+        :return:
+        """
+        batch_size = obs.shape[0]
+        obs = check(obs).to(self.device)
+
+        v_glob, obs_rep = self.encoder(obs)
+
+        output_action_dis, output_action_log_dis, output_action_con, output_action_log_con = \
+            autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim, self.device, self.available_actions)
+
+        return output_action_dis, output_action_log_dis, output_action_con, output_action_log_con, v_glob
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
