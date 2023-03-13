@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 from torch.distributions import Categorical
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
-from Utils.util import *
+from utils.util import *
 
 
 class Actor(nn.Module):

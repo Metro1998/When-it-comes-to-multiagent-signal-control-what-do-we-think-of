@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from torch.nn import functional as F
 from torch.distributions import Categorical
-from Utils.util import *
+from utils.util import *
 
 """
 reference: 
@@ -217,7 +217,18 @@ class MultiAgentTransformer(nn.Module):
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
-    def get_actions(self, obs):
+    def get_values(self, obs):
+        """
+        Get value function predictions.
+        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
+        :return: (torch.Tensor) value function predictions
+        """
+        obs = check(obs).to(self.device)
+        v_glob, _ = self.encoder(obs)
+
+        return v_glob
+
+    def act(self, obs):
         """
         Compute actions and value function predictions for the given inputs.
         :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
@@ -232,7 +243,6 @@ class MultiAgentTransformer(nn.Module):
             autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim, self.device, self.available_actions)
 
         return output_action_dis, output_action_log_dis, output_action_con, output_action_log_con, v_glob
-
 
 
 
