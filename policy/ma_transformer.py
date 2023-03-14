@@ -200,16 +200,13 @@ class MultiAgentTransformer(nn.Module):
     def evaluate_actions(self, obs, act_dis, act_con):
         """
         Get action logprobs / entropy for actor update.
-        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
-        :param act_dis: (np.ndarray) (batch_size, agent_num, 1)
-        :param act_con: (np.ndarray) (batch_size, agent_num, action_dim)
+        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)
+        :param act_dis: (torch.Tensor) (batch_size, agent_num)
+        :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
         :return:
         """
 
         batch_size = obs.shape[0]
-        obs = check(obs).to(self.device)
-        act_dis = check(act_dis).to(device=self.device, dtype=torch.int64)
-        act_con = check(act_con).to(self.device)
 
         v_glob, obs_rep = self.encoder(obs)
         act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num,

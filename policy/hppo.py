@@ -338,7 +338,7 @@ class HAPPO:
         # (num_envs, num_steps, num_agents) --> (num_envs, num_steps)
         rew_buf = np.sum(rew_buf, axis=-1)
 
-        advantage, reward_to_go = np.array([]), np.array([])
+        advantage, reward_to_go = np.array([])
         for i in val_buf.shape[0]:  # num_envs
             val = val_buf[i]
             rew = rew_buf[i]

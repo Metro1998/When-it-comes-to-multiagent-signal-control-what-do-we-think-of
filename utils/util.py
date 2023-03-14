@@ -114,7 +114,16 @@ def parallel_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, actio
 
     return act_log_dis, entropy_dis, act_log_con, entropy_con
     
-    
-    
+
+def batchify_obs(obs, device):
+    """
+    Converts dic style observations to batch of torch arrays.
+    :param obs:
+    :param device:
+    :return:
+    """
+    obs = np.stack([obs[o] for o in obs], axis=0)
+    obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
+
     
     
