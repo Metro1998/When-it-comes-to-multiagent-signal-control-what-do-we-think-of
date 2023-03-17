@@ -116,7 +116,7 @@ class Actor(nn.Module):
 
     def evaluate_action_dis(self, obs, obs_signal, action_dis):
         """
-        Compute log probability and entropy of given actions.
+        Compute log probability and entropy of given stages.
         :param obs: the ordinary information (observation) of the agent (and its neighbors)
         :param obs_signal: the information of signal sequence  (sequence_length, state_space_signal)
         :param action_dis: the discrete action
@@ -131,7 +131,7 @@ class Actor(nn.Module):
 
     def evaluate_action_con(self, obs, action_con):
         """
-        Compute log probability and entropy of given actions.
+        Compute log probability and entropy of given stages.
         :param obs: the ordinary information (observation) of the agent (and its neighbors)
         :param action_con: the continuous action
         :return:

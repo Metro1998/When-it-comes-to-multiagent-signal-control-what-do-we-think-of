@@ -37,12 +37,13 @@ def autoregressive_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num,
     :param agent_num:
     :param action_dim:
     :param device:
-    :param available_actions: available discrete actions that an agent could select, and we still approximate the whole
-    action space of continuous actions, since it will be reselect by discrete actions.
+    :param available_actions: available discrete stages that an agent could select, and we still approximate the whole
+    action space of continuous stages, since it will be reselect by discrete stages.
     :return:
     """
 
-    shifted_action_dis = torch.zeros((batch_size, agent_num, action_dim + 1)).to(device)  # TODO
+    shifted_action_dis = torch.zeros((batch_size, agent_num, action_dim + 1)).to(device)
+    # Note that the start signal is [1, 0, 0, ... 0], that‘s why the 3rd dimension of action_dim + 1
     shifted_action_dis[: 0, 0] = 1
     output_action_dis = torch.zeros((batch_size, agent_num, 1), dtype=torch.long)
     output_action_log_dis = torch.zeros_like(output_action_dis, dtype=torch.float32)
@@ -89,8 +90,8 @@ def parallel_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, actio
     :param act_dis: (torch.Tensor) (batch_size, agent_num, 1) the final discrete selection not the logits
     :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim) all of the continuous heads
     :param device:
-    :param available_actions: available discrete actions that an agent could select, and we still approximate the whole
-    action space of continuous actions, since it will be reselect by discrete actions.
+    :param available_actions: available discrete stages that an agent could select, and we still approximate the whole
+    action space of continuous stages, since it will be reselect by discrete stages.
     :return:
     """
     one_hot_action = F.one_hot(act_dis.squeeze(-1), num_classes=action_dim)  # (batch_size, agent_num, action_dim)

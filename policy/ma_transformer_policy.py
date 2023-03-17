@@ -198,6 +198,15 @@ class PPOTrainer:
 
         return loss_pi_con, approx_kl_con
 
+    def get_action(self, obs):
+        """
+
+        :param obs: (torch.Tensor)
+        :return:
+        """
+        act_con, act_dis, logp_con, logp_dis, _ = self.policy.act(obs)
+        return act_con, act_dis, logp_con, logp_dis
+
     def save(self, save_dir, episode):
         torch.save(self.policy.state_dict(), str(save_dir) + "/MAT_" + str(episode) + ".pt")
 

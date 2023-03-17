@@ -227,19 +227,18 @@ class MultiAgentTransformer(nn.Module):
 
     def act(self, obs):
         """
-        Compute actions and value function predictions for the given inputs.
-        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
+        Compute stages and value function predictions for the given inputs.
+        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)
         :return:
         """
         batch_size = obs.shape[0]
-        obs = check(obs).to(self.device)
 
         v_glob, obs_rep = self.encoder(obs)
 
-        output_action_dis, output_action_log_dis, output_action_con, output_action_log_con = \
+        act_dis, logp_dis, act_con, logp_con = \
             autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim, self.device, self.available_actions)
 
-        return output_action_dis, output_action_log_dis, output_action_con, output_action_log_con, v_glob
+        return act_con, act_dis, logp_con, logp_dis, v_glob
 
 
 
