@@ -138,34 +138,34 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, obs_dim, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std, action_type):
+    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std, action_type):
         super(Decoder, self).__init__()
 
         self.action_dim = action_dim
         self.embd_dim = embd_dim
         self.action_type = action_type
 
-        if action_type != 'Discrete':
-            self.log_std = nn.Parameter(torch.zeros(action_dim, ) + init_log_std)
+        self.log_std = nn.Parameter(torch.zeros(action_dim, ) + init_log_std)
 
-        if action_type == 'Discrete':
-            self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 1, embd_dim, bias=False), activate=True), nn.GELU())
-        else:
-            self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim, embd_dim), activate=True), nn.GELU())
+        self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True), nn.GELU())
         self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
-        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-                                  nn.LayerNorm(embd_dim),
-                                  init_(nn.Linear(embd_dim, action_dim)))
+        self.head_dis = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
+                                      nn.LayerNorm(embd_dim),
+                                      init_(nn.Linear(embd_dim, action_dim)),
+                                      nn.Softmax(dim=-1))
+        self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
+                                      nn.LayerNorm(embd_dim),
+                                      init_(nn.Linear(embd_dim, 1)))
 
-    def forward(self, act, obs_rep):
-        action_embeddings = self.action_encoder(act)
+    def forward(self, hybrid_action, obs_rep):
+        action_embeddings = self.action_encoder(hybrid_action)
         x = self.ln(action_embeddings)
         for block in self.blocks:
             x = block(x, obs_rep)
-        logit = self.head(x)
-
-        return logit
+        logits = self.head_dis(x)
+        mean = self.head_con(x)
+        return logits, mean
 
 
 class MultiAgentTransformer(nn.Module):

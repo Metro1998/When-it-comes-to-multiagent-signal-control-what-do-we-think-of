@@ -25,56 +25,75 @@ def check(input):
     output = torch.from_numpy(input) if type(input) == np.ndarray else input
     return output
 
+def remap(time_remaining, max_green):
+    """
+    Remap the remaining time to its original range.
+    :param time_remaining:
+    :param max_green:
+    :return:
+    """
+    return -1 + 2 * time_remaining / max_green
 
-def autoregressive_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, action_dim, device, available_actions=None):
+
+def autoregressive_act(decoder, obs_rep, agent_num, action_dim, action_dis, action_con, max_green, device):
     """
     In the rollout phase, it will infer the first action a_1 with a start signal a_0, then insert the back into the
     input and infer the a_2 with [a_0, a_1], and so on till a_n is inferred, aka, autoregressive.
-    :param decoder_dis:
-    :param decoder_con:
-    :param obs_rep: (torch.Tensor) (batch_size, agent_num, embd_dim) the representation of the obs, which has been masked
-    :param batch_size:
+    :param decoder:
+    :param obs_rep:
     :param agent_num:
     :param action_dim:
+    :param action_dis:
+    :param action_con:
+    :param max_green:
     :param device:
-    :param available_actions: available discrete stages that an agent could select, and we still approximate the whole
-    action space of continuous stages, since it will be reselect by discrete stages.
     :return:
     """
 
-    shifted_action_dis = torch.zeros((batch_size, agent_num, action_dim + 1)).to(device)
-    # Note that the start signal is [1, 0, 0, ... 0], that‘s why the 3rd dimension of action_dim + 1
-    shifted_action_dis[: 0, 0] = 1
-    output_action_dis = torch.zeros((batch_size, agent_num, 1), dtype=torch.long)
-    output_action_log_dis = torch.zeros_like(output_action_dis, dtype=torch.float32)
-
-    shifted_action_con = torch.zeros((batch_size, agent_num, action_dim)).to(device)
-    output_action_con = torch.zeros((batch_size, agent_num, action_dim), dtype=torch.float32)
-    output_action_log_con = torch.zeros_like(output_action_con, dtype=torch.float32)
+    # Note that the start signal is [1, 0, 0, ... 0] with the length of action_dim + 1,
+    # that‘s why the 2nd dimension of shifted_action is action_dim (one hot) + 1 + 1 (the mean of continuous parameter)
+    shifted_action = torch.zeros((agent_num, action_dim + 2), dtype=torch.float32, device=device)
+    shifted_action[0, 0] = 1
+    output_action = torch.zeros((agent_num, 2), dtype=torch.float32, device=device)
+    output_action_logp = torch.zeros_like(output_action, dtype=torch.float32, device=device)
+    std = torch.clamp(F.softplus(decoder.log_std), min=0.01, max=0.5)
 
     for i in range(agent_num):
-        logit = decoder_dis(shifted_action_dis,obs_rep)[:, i, :]
-        if available_actions is not None:
-            logit[available_actions[:, i, :] == 0] = -1e10
-        dist_dis = Categorical(logits=logit)
-        act_dis = dist_dis.sample()
-        act_log_dis = dist_dis.log_prob(act_dis)
+        # Get the DISTRIBUTION according to the previous actions
+        logits, mean = decoder(shifted_action, obs_rep)
+        # If it's time to make a decision rather than to infer
+        if action_con[i] == 0:
+            # Mask the last discrete choice, which means the phase is not repeatable
+            logits[i][action_dis[i]] = -1e10
+        dist_dis = Categorical(logits=logits[i])
+        dist_con = Normal(mean[i], std)
 
-        mean = decoder_con(shifted_action_con, obs_rep)[:, i, :]
-        std = torch.clamp(F.softplus(decoder_con.log_std), min=0.01, max=0.5)
-        dist_con = Normal(mean, std)
-        act_con = dist_con.sample()
-        act_log_con = dist_con.log_prob(act_con)
+        # If it's time to make a decision rather than to infer, just sample the action from the distribution
+        if action_con[i] == 0:
+            act_dis = dist_dis.sample()
+            act_logp_dis = dist_dis.log_prob(act_dis)
 
-        output_action_dis[:, i, :] = act_dis.unsqueeze(-1)
-        output_action_log_dis[:, i, :] = act_log_dis.unsqueeze(-1)
-        output_action_con[:, i, :] = act_con
-        output_action_log_con[:, i, :] = act_log_con
-        if i + 1 < agent_num:
-            shifted_action_dis[:, i + 1, 1:] = F.one_hot(act_dis, num_classes=action_dim)
-            shifted_action_con[:, i + 1, :] = act_con
+            act_con = dist_con.sample()
+            act_logp_con = dist_con.log_prob(act_con)
 
-    return output_action_dis, output_action_log_dis, output_action_con, output_action_log_con
+            if i + 1 < agent_num:
+                shifted_action[i + 1, 1:-1] = F.one_hot(act_dis, num_classes=action_dim).float()
+                shifted_action[i + 1, -1] = act_con
+
+        else:
+            # Remap the time para to its real range (0, max_green) -> (-1, 1)
+            action_con[i] = remap(action_con[i], max_green)
+            act_logp_dis = dist_dis.log_prob(action_dis[i])
+            act_logp_con = dist_con.log_prob(action_con[i])
+
+            shifted_action[i + 1, 1:-1] = F.one_hot(action_dis[i], num_classes=action_dim).float()
+            shifted_action[i + 1, :] = action_con[i]
+
+        output_action[i, :] = torch.cat((action_dis[i].float(), action_con[i]), -1)
+        output_action_logp[i, :] = torch.cat((act_logp_dis, act_logp_con), -1)
+
+    return output_action, output_action_logp
+
 
 
 def parallel_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, action_dim, act_dis, act_con, device, available_actions=None):
