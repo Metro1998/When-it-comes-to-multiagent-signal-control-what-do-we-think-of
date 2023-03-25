@@ -205,10 +205,10 @@ class MultiAgentTransformer(nn.Module):
         :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
         :return:
         """
-
         batch_size = obs.shape[0]
-
+        obs = check(obs).to(self.device)
         v_glob, obs_rep = self.encoder(obs)
+
         act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num,
                                                                           self.action_dim, act_dis, act_con, self.device, self.available_actions)
 
@@ -221,9 +221,9 @@ class MultiAgentTransformer(nn.Module):
         :return: (torch.Tensor) value function predictions
         """
         obs = check(obs).to(self.device)
-        v_glob, _ = self.encoder(obs)
+        values, _ = self.encoder(obs)
 
-        return v_glob
+        return values
 
     def act(self, obs):
         """
@@ -233,12 +233,12 @@ class MultiAgentTransformer(nn.Module):
         """
         batch_size = obs.shape[0]
 
-        v_glob, obs_rep = self.encoder(obs)
+        values, obs_rep = self.encoder(obs)
 
         act_dis, logp_dis, act_con, logp_con = \
             autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim, self.device, self.available_actions)
 
-        return act_con, act_dis, logp_con, logp_dis, v_glob
+        return act_con, act_dis, logp_con, logp_dis, values
 
 
 

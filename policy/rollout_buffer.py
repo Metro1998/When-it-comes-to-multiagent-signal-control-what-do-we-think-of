@@ -20,9 +20,9 @@ class PPOBuffer:
 
         self.obs_buf = np.zeros((num_steps, num_agents, obs_dim), dtype=np.float32)
         self.rew_buf = np.zeros((num_steps, num_agents), dtype=np.float32)
-        self.act_con_buf = np.zeros((num_steps, num_agents, act_dim), dtype=np.float32)
+        self.act_con_buf = np.zeros((num_steps, num_agents), dtype=np.float32)
         self.act_dis_buf = np.zeros((num_steps, num_agents), dtype=np.int64)
-        self.logp_con_buf = np.zeros((num_steps, num_agents, act_dim), dtype=np.float32)
+        self.logp_con_buf = np.zeros((num_steps, num_agents), dtype=np.float32)
         self.logp_dis_buf = np.zeros((num_steps, num_agents), dtype=np.float32)
         self.ptr, self.max_size = 0, num_steps
         self.end_idx = np.array([0])
