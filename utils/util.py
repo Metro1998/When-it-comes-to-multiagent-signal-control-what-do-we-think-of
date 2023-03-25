@@ -25,6 +25,14 @@ def check(input):
     output = torch.from_numpy(input) if type(input) == np.ndarray else input
     return output
 
+
+def init(module, weight_init, bias_init, gain=1):
+    weight_init(module.weight.data, gain=gain)
+    if module.bias is not None:
+        bias_init(module.bias.data)
+    return module
+
+
 def remap(time_remaining, max_green):
     """
     Remap the remaining time to its original range.
@@ -95,8 +103,8 @@ def autoregressive_act(decoder, obs_rep, agent_num, action_dim, action_dis, acti
     return output_action, output_action_logp
 
 
-
-def parallel_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, action_dim, act_dis, act_con, device, available_actions=None):
+def parallel_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, action_dim, act_dis, act_con, device,
+                 available_actions=None):
     """
     In the training process, this function get input of sequence [a_0, a_1, ..., a_n-1] and predict [a_1, a_2, ..., a_n]
     simultaneously in one evaluate_actions process, aka, teaching force.
@@ -133,7 +141,7 @@ def parallel_act(decoder_dis, decoder_con, obs_rep, batch_size, agent_num, actio
     entropy_con = dist_con.entropy()
 
     return act_log_dis, entropy_dis, act_log_con, entropy_con
-    
+
 
 def batchify_obs(obs, device):
     """
@@ -144,6 +152,3 @@ def batchify_obs(obs, device):
     """
     obs = np.stack([obs[o] for o in obs], axis=0)
     obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
-
-    
-    

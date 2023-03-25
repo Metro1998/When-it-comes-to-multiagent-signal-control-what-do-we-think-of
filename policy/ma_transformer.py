@@ -19,10 +19,10 @@ def init_(m, gain=0.01, activate=False):
     return init(m, nn.init.orthogonal_, lambda x: nn.init.constant_(x, 0), gain=gain)
 
 
-class SelfAttention(nn.Module):
+class MultiHeadAttention(nn.Module):
 
     def __init__(self, embd_dim, head_num, agent_num, masked=False):
-        super(SelfAttention, self).__init__()
+        super(MultiHeadAttention, self).__init__()
 
         assert embd_dim % head_num == 0
         self.masked = masked
@@ -41,8 +41,8 @@ class SelfAttention(nn.Module):
         self.att_bp = None
 
     def forward(self, key, value, query):
-        B, L, D = query.size()
         # B: batch_size, L: sequence_length, D: embd_dim
+        B, L, D = query.size()
 
         # calculate query, key, values for all heads in batch and move head evaluate_actions to be the batch dim
         k = self.key(key).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
@@ -74,11 +74,11 @@ class EncodeBlock(nn.Module):
 
         self.ln1 = nn.LayerNorm(embd_dim)
         self.ln2 = nn.LayerNorm(embd_dim)
-        # self.attn = SelfAttention(n_embd, n_head, n_agent, masked=True)
-        self.attn = SelfAttention(embd_dim, head_num, agent_num, masked=False)
+        # self.attn = MultiHeadAttention(n_embd, n_head, n_agent, masked=True)
+        self.attn = MultiHeadAttention(embd_dim, head_num, agent_num, masked=False)
         self.mlp = nn.Sequential(
             init_(nn.Linear(embd_dim, 1 * embd_dim), activate=True),
-            nn.GELU(),  # TODO
+            nn.GELU(),
             init_(nn.Linear(1 * embd_dim, embd_dim))
         )
 
@@ -97,8 +97,8 @@ class DecodeBlock(nn.Module):
         self.ln1 = nn.LayerNorm(embd_dim)
         self.ln2 = nn.LayerNorm(embd_dim)
         self.ln3 = nn.LayerNorm(embd_dim)
-        self.attn1 = SelfAttention(embd_dim, head_num, agent_num, masked=True)
-        self.attn2 = SelfAttention(embd_dim, head_num, agent_num, masked=True)
+        self.attn1 = MultiHeadAttention(embd_dim, head_num, agent_num, masked=True)
+        self.attn2 = MultiHeadAttention(embd_dim, head_num, agent_num, masked=True)
         self.mlp = nn.Sequential(
             init_(nn.Linear(embd_dim, 1 * embd_dim), activate=True),
             nn.GELU(),
@@ -125,28 +125,29 @@ class Encoder(nn.Module):
                                          init_(nn.Linear(obs_dim, embd_dim), activate=True), nn.GELU())
         self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
-        self.head = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True), nn.GELU(), nn.LayerNorm(embd_dim),
-                                  init_(nn.Linear(obs_dim, 1)))
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(), nn.LayerNorm(embd_dim),
+                                  init_(nn.Linear(obs_dim, agent_num)))
 
     def forward(self, obs):
         obs_embeddings = self.obs_encoder(obs)
         rep = self.blocks(self.ln(obs_embeddings))
-        v_glob = self.head(rep)
+        values = self.head(rep)
 
-        return v_glob, rep
+        return values, rep
 
 
 class Decoder(nn.Module):
 
-    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std, action_type):
+    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std):
         super(Decoder, self).__init__()
 
         self.action_dim = action_dim
         self.embd_dim = embd_dim
-        self.action_type = action_type
 
         self.log_std = nn.Parameter(torch.zeros(action_dim, ) + init_log_std)
 
+        # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
+        # and 1 indicates the mean of stage-indexed-duration.
         self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True), nn.GELU())
         self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
@@ -156,7 +157,7 @@ class Decoder(nn.Module):
                                       nn.Softmax(dim=-1))
         self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
                                       nn.LayerNorm(embd_dim),
-                                      init_(nn.Linear(embd_dim, 1)))
+                                      init_(nn.Linear(embd_dim, action_dim)))
 
     def forward(self, hybrid_action, obs_rep):
         action_embeddings = self.action_encoder(hybrid_action)
@@ -164,8 +165,8 @@ class Decoder(nn.Module):
         for block in self.blocks:
             x = block(x, obs_rep)
         logits = self.head_dis(x)
-        mean = self.head_con(x)
-        return logits, mean
+        means = self.head_con(x)
+        return logits, means
 
 
 class MultiAgentTransformer(nn.Module):
@@ -192,8 +193,7 @@ class MultiAgentTransformer(nn.Module):
         self.encoder = Encoder(obs_dim, block_num, embd_dim, head_num, agent_num)
         # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
         # each other, so are they in MAT.
-        self.decoder_dis = Decoder(obs_dim, action_dim, embd_dim, block_num, head_num, agent_num, None, "Discrete")
-        self.decoder_con = Decoder(obs_dim, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std, "Continuous")
+        self.decoder = Decoder(action_dim, embd_dim, block_num, head_num, agent_num, init_log_std)
 
         self.to(self.device)
 
