@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2023-04-04 10:09:43 by Eclipse SUMO netedit Version 1.12.0
+-->
+
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <flow id="f_0" begin="0.00" from="4350453#2" to="673029551#1" via="674577847#1 674577847#3 674577847#5 834097579#2 834097579#5 331183273#1" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_1" begin="0.00" from="571884279#1" to="673029536#8" via="514391102 4350454 831638481#1 831638481#3 673029536#3 673029536#6" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_2" begin="0.00" from="578316484#0.702" to="578316484#2" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_3" begin="0.00" from="-578316484#2" to="-578316484#0" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_4" begin="0.00" from="595988776#0.556" to="595988776#5" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_5" begin="0.00" from="585017417#0.578" to="585017417#2" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_6" begin="0.00" from="4856249#0.1515" to="4856249#7" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_7" begin="0.00" from="-4856249#8.663" to="-4856249#5" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_8" begin="0.00" from="504565897#0" to="504565897#4" end="3600.00" vehsPerHour="800.00"/>
+    <flow id="f_9" begin="0.00" from="674359419#0" to="674359419#2" end="3600.00" vehsPerHour="800.00"/>
+</routes>

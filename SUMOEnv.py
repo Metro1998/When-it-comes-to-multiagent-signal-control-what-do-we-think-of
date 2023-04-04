@@ -6,23 +6,41 @@ import sumolib
 from gymnasium import spaces
 from typing import Callable, Optional, Tuple, Union, List
 
+LIBSUMO = False
+
 
 class TrafficSignal:
     """
     This class represents a Traffic Signal controlling an intersection.
     It is responsible for retrieving information and changing the traffic phase using the Traci API.
+
+    IMPORTANT!!! NOTE THAT
+    Our reward is defined as the change in vehicle number of one specific junction.
+    Our state is defined as the pressure between the inlanes and outlanes.
     """
-    def __init__(self,
-                 tl_id,
-                 sumo):
+
+    def __init__(self, tl_id, sumo):
 
         self.id = tl_id
         self.sumo = sumo
 
-        self.in_lanes = list(
-            dict.fromkeys(self.sumo.trafficlight.getControlledLanes(self.id))
-        )
-        self.out_lanes = None  # TODO
+        # Links is relative with connections defined in the rou.xml, what's more the connection definition should be
+        # relative with traffic state definition. Therefore, there is no restriction that the connection should start
+        # at north and step clockwise then.
+        all_lanes = self.sumo.trafficlight.getControlledLinks(self.id)
+        self.in_lanes = [conn[0][0] for conn in all_lanes]
+        # Delete the right turn movement.
+        del self.in_lanes[0::3]
+        self.out_lanes = [conn[0][1] for conn in all_lanes]
+        del self.out_lanes[0::3]
+
+        self.subscribe()
+
+        self.inlane_halting_vehicle_number = None
+        self.inlane_halting_vehicle_number_old = None
+        self.inlane_waiting_time = None
+        self.outlane_halting_vehicle_number = None
+        self.outlane_waiting_time = None
 
     # def build_phase:
     def subscribe(self):
@@ -33,7 +51,34 @@ class TrafficSignal:
         """
 
         for lane_id in self.in_lanes:
-            self.sumo.lane.subscribe(lane_id, [traci.constants.LAST_STEP_VEHICLE_HALTING_NUMBER, traci.constants.VAR_WAITING_TIME])
+            self.sumo.lane.subscribe(lane_id, [traci.constants.LAST_STEP_VEHICLE_HALTING_NUMBER,
+                                               traci.constants.VAR_WAITING_TIME])
+
+        for lane_id in self.out_lanes:
+            self.sumo.lane.subscribe(lane_id, [traci.constants.LAST_STEP_VEHICLE_HALTING_NUMBER,
+                                               traci.constants.VAR_WAITING_TIME])
+
+    def get_subscription_result(self):
+        self.inlane_halting_vehicle_number = np.array(
+            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.in_lanes])
+        # self.inlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.in_lanes]
+        self.outlane_halting_vehicle_number = np.array(
+            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.out_lanes])
+        # self.outlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.out_lanes]
+
+    def compute_reward(self):
+        if not self.inlane_halting_vehicle_number_old:
+            reward = -sum(self.inlane_halting_vehicle_number)
+        else:
+            reward = sum(self.inlane_halting_vehicle_number_old) - sum(self.inlane_halting_vehicle_number)
+        self.inlane_halting_vehicle_number_old = self.inlane_halting_vehicle_number
+
+        return reward
+
+    def compute_observation(self):
+        observation = self.inlane_halting_vehicle_number - self.outlane_halting_vehicle_number
+
+        return observation
 
 
 class SUMOEnv(gym.Env):
@@ -56,8 +101,7 @@ class SUMOEnv(gym.Env):
 
         self.action_space = spaces.Dict({
             'stages': spaces.MultiDiscrete(np.array([num_stage - 1] * num_agent)),
-            'duration': spaces.Box(low=np.array([min_green] * num_agent), high=np.array([max_green] * num_agent),
-                                   dtype=np.float32)
+            'duration': spaces.Box(low=np.array([min_green] * num_agent), high=np.array([max_green] * num_agent), dtype=np.int64)
         })
 
         self.use_gui = use_gui
@@ -121,7 +165,8 @@ class SUMOEnv(gym.Env):
         if self.use_gui or self.render_mode is not None:
             self.sumo.gui.setSchema(traci.gui.DEFAULT_VIEW, "real world")
 
-        self.tl_ids = list(self.sumo.trafficlight_getIDList())
+        self.tl_ids = list(self.sumo.trafficlight.getIDList())
+        print(self.tl_ids)
         self.observations = {tl: None for tl in self.tl_ids}
         self.rewards = {tl: None for tl in self.tl_ids}
 
@@ -154,3 +199,19 @@ class SUMOEnv(gym.Env):
             traci.switch(self.label)
         traci.close()
 
+
+if __name__ == "__main__":
+    env = SUMOEnv(yellow=3,
+                  num_stage=8,
+                  num_agent=3,
+                  use_gui=False,
+                  net_file='corrdor.net.xml',
+                  route_file='hangzhou.rou.xml'
+                  )
+    env.reset()
+
+    ts = TrafficSignal(env.tl_ids[0], env.sumo)
+    ts.get_subscription_result()
+    obs = ts.compute_observation()
+    rew = ts.compute_reward()
+    print(obs, rew)

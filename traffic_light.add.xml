@@ -1,0 +1,76 @@
+<additional>
+  <tlLogic id="0" programID="my_program" offset="0" type="static">
+    <phase duration="100"  state="gGrgrrgGrgrr"/>
+    <phase duration="100"  state="grrgGrgrrgGr"/>
+    <phase duration="100"  state="grGgrrgrGgrr"/>
+    <phase duration="100"  state="grrgrGgrrgrG"/>
+    <phase duration="100"  state="gGGgrrgrrgrr"/>
+    <phase duration="100"  state="grrgGGgrrgrr"/>
+    <phase duration="100"  state="grrgrrgGGgrr"/>
+    <phase duration="100"  state="grrgrrgrrgGG"/>
+
+    <phase duration="3"  state="gyrgrrgyrgrr" next="1"/>
+    <phase duration="3"  state="gyrgrrgyrgrr" next="2"/>
+    <phase duration="3"  state="gyrgrrgyrgrr" next="3"/>
+    <phase duration="3"  state="gGrgrrgyrgrr" next="4"/>
+    <phase duration="3"  state="gyrgrrgyrgrr" next="5"/>
+    <phase duration="3"  state="gyrgrrgGrgrr" next="6"/>
+    <phase duration="3"  state="gyrgrrgyrgrr" next="7"/>
+
+    <phase duration="3"  state="grrgyrgrrgyr" next="0"/>
+    <phase duration="3"  state="grrgyrgrrgyr" next="2"/>
+    <phase duration="3"  state="grrgyrgrrgyr" next="3"/>
+    <phase duration="3"  state="grrgyrgrrgyr" next="4"/>
+    <phase duration="3"  state="grrgGrgrrgyr" next="5"/>
+    <phase duration="3"  state="grrgyrgrrgyr" next="6"/>
+    <phase duration="3"  state="grrgyrgrrgGr" next="7"/>
+
+    <phase duration="3"  state="grygrrgrygrr" next="0"/>
+    <phase duration="3"  state="grygrrgrygrr" next="1"/>
+    <phase duration="3"  state="grygrrgrygrr" next="3"/>
+    <phase duration="3"  state="grGgrrgrygrr" next="4"/>
+    <phase duration="3"  state="grygrrgrygrr" next="5"/>
+    <phase duration="3"  state="grygrrgrGgrr" next="6"/>
+    <phase duration="3"  state="grygrrgrygrr" next="7"/>
+
+    <phase duration="3"  state="grrgrygrrgry" next="0"/>
+    <phase duration="3"  state="grrgrygrrgry" next="1"/>
+    <phase duration="3"  state="grrgrygrrgry" next="2"/>
+    <phase duration="3"  state="grrgrygrrgry" next="4"/>
+    <phase duration="3"  state="grrgrGgrrgry" next="5"/>
+    <phase duration="3"  state="grrgrygrrgry" next="6"/>
+    <phase duration="3"  state="grrgrygrrgrG" next="7"/>
+
+    <phase duration="3"  state="gGygrrgrrgrr" next="0"/>
+    <phase duration="3"  state="gyygrrgrrgrr" next="1"/>
+    <phase duration="3"  state="gyGgrrgrrgrr" next="2"/>
+    <phase duration="3"  state="gyygrrgrrgrr" next="3"/>
+    <phase duration="3"  state="gyygrrgrrgrr" next="5"/>
+    <phase duration="3"  state="gyygrrgrrgrr" next="6"/>
+    <phase duration="3"  state="gyygrrgrrgrr" next="7"/>
+
+    <phase duration="3"  state="grrgyygrrgrr" next="0"/>
+    <phase duration="3"  state="grrgGygrrgrr" next="1"/>
+    <phase duration="3"  state="grrgyygrrgrr" next="2"/>
+    <phase duration="3"  state="grrgyGgrrgrr" next="3"/>
+    <phase duration="3"  state="grrgyygrrgrr" next="4"/>
+    <phase duration="3"  state="grrgyygrrgrr" next="6"/>
+    <phase duration="3"  state="grrgyygrrgrr" next="7"/>
+
+    <phase duration="3"  state="grrgrrgGygrr" next="0"/>
+    <phase duration="3"  state="grrgrrgyygrr" next="1"/>
+    <phase duration="3"  state="grrgrrgyGgrr" next="2"/>
+    <phase duration="3"  state="grrgrrgyygrr" next="3"/>
+    <phase duration="3"  state="grrgrrgyygrr" next="4"/>
+    <phase duration="3"  state="grrgrrgyygrr" next="6"/>
+    <phase duration="3"  state="grrgrrgyygrr" next="7"/>
+
+    <phase duration="3"  state="grrgrrgrrgyy" next="0"/>
+    <phase duration="3"  state="grrgrrgrrgGy" next="1"/>
+    <phase duration="3"  state="grrgrrgrrgyy" next="2"/>
+    <phase duration="3"  state="grrgrrgrrgyG" next="3"/>
+    <phase duration="3"  state="grrgrrgrrgyy" next="4"/>
+    <phase duration="3"  state="grrgrrgrrgyy" next="5"/>
+    <phase duration="3"  state="grrgrrgrrgyy" next="6"/>
+  </tlLogic>
+</additional>
