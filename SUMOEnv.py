@@ -3,7 +3,8 @@ import numpy as np
 import traci
 import sumolib
 
-from gymnasium import spaces
+from gymnasium.spaces import Tuple, Discrete, Box
+from collections import deque
 from typing import Callable, Optional, Tuple, Union, List
 
 LIBSUMO = False
@@ -19,10 +20,17 @@ class TrafficSignal:
     Our state is defined as the pressure between the inlanes and outlanes.
     """
 
-    def __init__(self, tl_id, sumo):
+    def __init__(self, tl_id, yellow, sumo):
 
         self.id = tl_id
+        self.yellow = yellow
         self.sumo = sumo
+
+        # The schedule is responsible for the automatic timing for the incoming green stage.
+        # | 0 | 0 | 0 | 16 |
+        # | yellow len| when 16 is dequeued, the stage is automatically transferred to the green stage and 16 is for duration.
+        self.schedule = deque()
+        self.duration = None
 
         # Links is relative with connections defined in the rou.xml, what's more the connection definition should be
         # relative with traffic state definition. Therefore, there is no restriction that the connection should start
@@ -42,7 +50,41 @@ class TrafficSignal:
         self.outlane_halting_vehicle_number = None
         self.outlane_waiting_time = None
 
-    # def build_phase:
+    def set_stage_duration(self, stage: str, duration: int):
+        """
+        Call this at the beginning the of one stage, which includes the switching yellow light between two different
+        green light.
+        In add.xml the stage is defined as the yellow stage then next green stage, therefore the yellow stage is first
+        implemented, and after self.yellow seconds, it will automatically transfer to green stage, through a schedule to
+        set the incoming green stage's duration.
+        :return:
+        """
+        self.sumo.trafficlight.setPhase('universal_program', stage)
+        self.sumo.trafficlight.setPhaseDuration(self.yellow)
+        for i in range(self.yellow):
+            self.schedule.append(0)
+        self.duration = duration
+        self.schedule.append(duration)
+
+    def check(self):
+        """
+        Check whether the yellow stage is over and automatically extend the green light.
+        # | 0 | 0 | 0 | 16 |  --->  | 0 | 0 | 0 | 0 | ... | 0 | -1 |
+        #                                       {     16X     } where -1 indicates that the agent should get a new action
+        :return:
+        """
+        if self.schedule[0] > 0:
+            self.sumo.trafficlight.setPhaseDuration(self.schedule[0])
+            for i in range(self.schedule[0] - 1):
+                self.schedule.append(0)
+            self.schedule.popleft()
+            self.schedule.append(-1)
+
+        return self.schedule[0]
+
+    def pop(self):
+        self.schedule.popleft()
+
     def subscribe(self):
         """
         Pre subscribe the information we interest, so as to accelerate the information retrieval.
@@ -97,17 +139,20 @@ class SUMOEnv(gym.Env):
                  max_depart_delay: int = -1,
                  waiting_time_memory: int = 1000,
                  time_to_teleport: int = -1,
+                 hybrid: bool = True
                  ):
 
-        self.action_space = spaces.Dict({
-            'stages': spaces.MultiDiscrete(np.array([num_stage - 1] * num_agent)),
-            'duration': spaces.Box(low=np.array([min_green] * num_agent), high=np.array([max_green] * num_agent), dtype=np.int64)
-        })
+        self.action_space = Tuple[
+                                Discrete(num_stage),
+                                Box(low=np.array([min_green]), high=np.array([max_green]), dtype=np.int64)
+                            ] * num_agent
 
+        self.yellow = yellow
         self.use_gui = use_gui
         self.net = net_file
         self.route = route_file
         self.sumo_seed = sumo_seed
+        self.num_stage = num_stage
         if self.use_gui or self.render_mode is not None:
             self.sumo_binary = sumolib.checkBinary("sumo-gui")
         else:
@@ -121,12 +166,35 @@ class SUMOEnv(gym.Env):
         self.episode = 0
         self.sumo = None
         self.tl_ids = None
+        self.tls = None
         self.observations = None
         self.rewards = None
 
-    # def step(self,
-    #          action: ActType
-    # ):
+    def step(self, action):
+        """
+
+        :param action:
+        :return:
+        """
+        for ac, tl in zip(action, self.tls):
+            # We use s == self.num_stage to indicate that the agent doesn't need to execute at this step.
+            if ac[0] != self.num_stage:
+                # transfer_matrix
+                tl.set_stage_duration(ac[0], ac[1])
+
+        while True:
+            # Just step the simulation.
+            self.sumo.simulationStep()
+            # Pop the most left element of the schedule.
+            [tl.pop() for tl in self.tls]
+            # Automatically execute the transition from the yellow stage to green stage, and simultaneously set the end indicator -1.
+            # Moreover, check() will return the front of the schedule.
+            checks = [tl.check() for tl in self.tls]
+            # ids are agents who should act right now.
+            if -1 in checks:
+                ids = [k for k, v in enumerate(checks) if v == -1]
+                break
+        # obs, reward, done, terminal, info todo
 
     def start_simulation(self):
         """
@@ -166,7 +234,7 @@ class SUMOEnv(gym.Env):
             self.sumo.gui.setSchema(traci.gui.DEFAULT_VIEW, "real world")
 
         self.tl_ids = list(self.sumo.trafficlight.getIDList())
-        print(self.tl_ids)
+        self.tls = [TrafficSignal(tl_id, yellow, self.sumo) for tl_id, yellow in zip(self.tl_ids, self.yellow)]
         self.observations = {tl: None for tl in self.tl_ids}
         self.rewards = {tl: None for tl in self.tl_ids}
 
@@ -210,7 +278,7 @@ if __name__ == "__main__":
                   )
     env.reset()
 
-    ts = TrafficSignal(env.tl_ids[0], env.sumo)
+    ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
     ts.get_subscription_result()
     obs = ts.compute_observation()
     rew = ts.compute_reward()

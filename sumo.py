@@ -273,9 +273,9 @@ class TrafficSignal:
         return [min(1, density) for density in lanes_density]
 
     def get_lanes_queue(self) -> List[float]:
-        """Returns the queue [0,1] of the vehicles in the incoming lanes of the intersection.
+        """Returns the schedule [0,1] of the vehicles in the incoming lanes of the intersection.
 
-        Obs: The queue is computed as the number of vehicles halting divided by the number of vehicles that could fit in the lane.
+        Obs: The schedule is computed as the number of vehicles halting divided by the number of vehicles that could fit in the lane.
         """
         lanes_queue = [
             self.sumo.lane.getLastStepHaltingNumber(lane)
@@ -309,7 +309,7 @@ class TrafficSignal:
     reward_fns = {
         "diff-waiting-time": _diff_waiting_time_reward,
         "average-speed": _average_speed_reward,
-        "queue": _queue_reward,
+        "schedule": _queue_reward,
         "pressure": _pressure_reward,
     }
 
@@ -386,8 +386,8 @@ class SumoEnvironment(gym.Env):
         single_agent (bool): If true, it behaves like a regular gym.Env. Else, it behaves like a MultiagentEnv (returns dict of observations, rewards, dones, infos).
         reward_fn (str/function/dict): String with the name of the reward function used by the agents, a reward function, or dictionary with reward functions assigned to individual traffic lights by their keys.
         observation_class (ObservationFunction): Inherited class which has both the observation function and observation space.
-        add_system_info (bool): If true, it computes system metrics (total queue, total waiting time, average speed) in the info dictionary.
-        add_per_agent_info (bool): If true, it computes per-agent (per-traffic signal) metrics (average accumulated waiting time, average queue) in the info dictionary.
+        add_system_info (bool): If true, it computes system metrics (total schedule, total waiting time, average speed) in the info dictionary.
+        add_per_agent_info (bool): If true, it computes per-agent (per-traffic signal) metrics (average accumulated waiting time, average schedule) in the info dictionary.
         sumo_seed (int/string): Random seed for sumo. If 'random' it uses a randomly chosen seed.
         fixed_ts (bool): If true, it will follow the phase configuration in the route_file and ignore the stages given in the :meth:`step` method.
         sumo_warnings (bool): If true, it will print SUMO warnings.
