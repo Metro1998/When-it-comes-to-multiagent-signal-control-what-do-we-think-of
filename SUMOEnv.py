@@ -3,7 +3,7 @@ import numpy as np
 import traci
 import sumolib
 
-from gymnasium.spaces import Tuple, Discrete, Box
+from gymnasium import spaces
 from collections import deque
 from typing import Callable, Optional, Tuple, Union, List
 
@@ -133,26 +133,36 @@ class SUMOEnv(gym.Env):
                  use_gui: bool,
                  net_file: str,
                  route_file: str,
+                 addition_file: str,
                  min_green: int = 0,
                  max_green: int = 40,
                  sumo_seed: Union[str, int] = "random",
                  max_depart_delay: int = -1,
                  waiting_time_memory: int = 1000,
                  time_to_teleport: int = -1,
+                 max_step_round: int = 3600,
+                 max_step_sample: int = 2000,
                  hybrid: bool = True
                  ):
 
-        self.action_space = Tuple[
-                                Discrete(num_stage),
-                                Box(low=np.array([min_green]), high=np.array([max_green]), dtype=np.int64)
-                            ] * num_agent
+        # self.action_space = spaces.Tuple((spaces.Discrete(num_stage), spaces.Box(low=min_green, high=max_green, shape=(1,), dtype=np.int64))) * num_agent
+        # self.observation_space = spaces.Box(low=-100, high=100, shape=(num_agent, num_stage), dtype=np.int64)
 
         self.yellow = yellow
         self.use_gui = use_gui
         self.net = net_file
         self.route = route_file
+        self.addition = addition_file
         self.sumo_seed = sumo_seed
+        # Whether the agent reaches the terminal state as defined under the MDP of the task.
         self.num_stage = num_stage
+        self.num_agent = num_agent
+        self.min_green = min_green
+        self.max_green = max_green
+        self.max_step_episode = max_step_round
+        # Whether the truncation condition outside the scope of the MDP is satisfied.
+        self.max_step_sample = max_step_sample
+
         if self.use_gui or self.render_mode is not None:
             self.sumo_binary = sumolib.checkBinary("sumo-gui")
         else:
@@ -163,12 +173,31 @@ class SUMOEnv(gym.Env):
         self.label = str(SUMOEnv.CONNECTION_LABEL)
         SUMOEnv.CONNECTION_LABEL += 1  # Increments itself when an instance is initialized
 
+        self.step_round = None
+        self.step_sample = None
         self.episode = 0
         self.sumo = None
         self.tl_ids = None
         self.tls = None
         self.observations = None
         self.rewards = None
+        self.terminated = None
+        self.truncated = None
+
+    @property
+    def observation_space(self):
+        """Return the observation space of a traffic signal.
+        Only used in case of single-agent environment.
+        """
+        return spaces.Box(low=-100, high=100, shape=(self.num_agent, self.num_stage), dtype=np.int64)
+
+    @property
+    def action_space(self):
+        """Return the action space of a traffic signal.
+        Only used in case of single-agent environment.
+        """
+        return spaces.Tuple((spaces.MultiDiscrete(np.array([self.num_stage] * self.num_agent)),
+                             spaces.Box(low=self.min_green, high=self.max_green, shape=(self.num_agent,), dtype=np.int64)))
 
     def step(self, action):
         """
@@ -176,25 +205,38 @@ class SUMOEnv(gym.Env):
         :param action:
         :return:
         """
-        for ac, tl in zip(action, self.tls):
+        for k, v in enumerate(action[0]):
             # We use s == self.num_stage to indicate that the agent doesn't need to execute at this step.
-            if ac[0] != self.num_stage:
+            if v != self.num_stage:
                 # transfer_matrix
-                tl.set_stage_duration(ac[0], ac[1])
+                self.tls[k].set_stage_duration(action[0][k], action[1][k])
 
         while True:
             # Just step the simulation.
             self.sumo.simulationStep()
             # Pop the most left element of the schedule.
             [tl.pop() for tl in self.tls]
+            self.step_round += 1
+            if self.step_round >= self.max_step_episode:
+                self.terminated = True
             # Automatically execute the transition from the yellow stage to green stage, and simultaneously set the end indicator -1.
             # Moreover, check() will return the front of the schedule.
             checks = [tl.check() for tl in self.tls]
             # ids are agents who should act right now.
-            if -1 in checks:
+            if -1 in checks or self.terminated:
                 ids = [k for k, v in enumerate(checks) if v == -1]
+                info = {'incoming': ids}
                 break
-        # obs, reward, done, terminal, info todo
+
+        self.step_sample += 1
+        if self.step_round >= self.max_step_sample:
+            self.truncated = True
+
+        [tl.get_subscription_result() for tl in self.tls]
+        observation = np.array([tl.compute_observation() for tl in self.tls])
+        reward = np.array([tl.compute_reward() for tl in self.tls])
+
+        return observation, reward, self.terminated, self.truncated, info
 
     def start_simulation(self):
         """
@@ -207,6 +249,8 @@ class SUMOEnv(gym.Env):
             self.net,
             "-r",
             self.route,
+            "-a",
+            self.addition,
             "--max-depart-delay",
             str(self.max_depart_delay),
             "--waiting-time-memory",
@@ -235,8 +279,6 @@ class SUMOEnv(gym.Env):
 
         self.tl_ids = list(self.sumo.trafficlight.getIDList())
         self.tls = [TrafficSignal(tl_id, yellow, self.sumo) for tl_id, yellow in zip(self.tl_ids, self.yellow)]
-        self.observations = {tl: None for tl in self.tl_ids}
-        self.rewards = {tl: None for tl in self.tl_ids}
 
     def reset(self, seed: Optional[int] = None, **kwargs):
         """
@@ -246,13 +288,23 @@ class SUMOEnv(gym.Env):
         :return:
         """
         super(SUMOEnv, self).reset(seed=seed, **kwargs)
-        if self.episode != 0:
+        if self.step_round != 0:
             self.close()
-        self.episode += 1
+        self.terminated = False
+        self.step_round = 0
 
         if seed is not None:
             self.sumo_seed = seed
         self.start_simulation()
+
+        [tl.get_subscription_result() for tl in self.tls]
+        observation = np.array([tl.compute_observation() for tl in self.tls])
+        info = {}
+        return observation, info
+
+    def reset_truncated(self):
+        self.truncated = False
+        self.step_sample = 0
 
     def close(self):
         """
@@ -269,17 +321,23 @@ class SUMOEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    env = SUMOEnv(yellow=3,
+    env = SUMOEnv(yellow=np.array([3, 3, 3]),
                   num_stage=8,
                   num_agent=3,
                   use_gui=False,
                   net_file='corrdor.net.xml',
-                  route_file='hangzhou.rou.xml'
+                  route_file='hangzhou.rou.xml',
+                  addition_file='traffic_light.add.xml'
                   )
     env.reset()
 
+    action = env.action_space.sample()
+    for k, v in enumerate(action[0]):
+        print(k, v)
     ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
     ts.get_subscription_result()
-    obs = ts.compute_observation()
-    rew = ts.compute_reward()
+    # obs = ts.compute_observation()
+    # rew = ts.compute_reward()
+
+    obs, rew, ter, trun, info = env.step(action)
     print(obs, rew)
