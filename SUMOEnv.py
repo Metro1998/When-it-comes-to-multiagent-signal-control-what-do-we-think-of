@@ -23,6 +23,7 @@ class TrafficSignal:
     def __init__(self, tl_id, yellow, sumo):
 
         self.id = tl_id
+        print(tl_id)
         self.yellow = yellow
         self.sumo = sumo
 
@@ -45,7 +46,7 @@ class TrafficSignal:
         self.subscribe()
 
         self.inlane_halting_vehicle_number = None
-        self.inlane_halting_vehicle_number_old = None
+        self.inlane_halting_vehicle_number_old = []
         self.inlane_waiting_time = None
         self.outlane_halting_vehicle_number = None
         self.outlane_waiting_time = None
@@ -59,8 +60,8 @@ class TrafficSignal:
         set the incoming green stage's duration.
         :return:
         """
-        self.sumo.trafficlight.setPhase('universal_program', stage)
-        self.sumo.trafficlight.setPhaseDuration(self.yellow)
+        self.sumo.trafficlight.setPhase(self.id, stage)
+        self.sumo.trafficlight.setPhaseDuration(self.id, self.yellow)
         for i in range(self.yellow):
             self.schedule.append(0)
         self.duration = duration
@@ -74,7 +75,7 @@ class TrafficSignal:
         :return:
         """
         if self.schedule[0] > 0:
-            self.sumo.trafficlight.setPhaseDuration(self.schedule[0])
+            self.sumo.trafficlight.setPhaseDuration(self.id, self.schedule[0])
             for i in range(self.schedule[0] - 1):
                 self.schedule.append(0)
             self.schedule.popleft()
@@ -109,7 +110,7 @@ class TrafficSignal:
         # self.outlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.out_lanes]
 
     def compute_reward(self):
-        if not self.inlane_halting_vehicle_number_old:
+        if len(self.inlane_halting_vehicle_number_old):
             reward = -sum(self.inlane_halting_vehicle_number)
         else:
             reward = sum(self.inlane_halting_vehicle_number_old) - sum(self.inlane_halting_vehicle_number)
@@ -173,8 +174,8 @@ class SUMOEnv(gym.Env):
         self.label = str(SUMOEnv.CONNECTION_LABEL)
         SUMOEnv.CONNECTION_LABEL += 1  # Increments itself when an instance is initialized
 
-        self.step_round = None
-        self.step_sample = None
+        self.step_round = 0
+        self.step_sample = 0
         self.episode = 0
         self.sumo = None
         self.tl_ids = None
@@ -324,20 +325,20 @@ if __name__ == "__main__":
     env = SUMOEnv(yellow=np.array([3, 3, 3]),
                   num_stage=8,
                   num_agent=3,
-                  use_gui=False,
-                  net_file='corrdor.net.xml',
-                  route_file='hangzhou.rou.xml',
-                  addition_file='traffic_light.add.xml'
+                  use_gui=True,
+                  net_file='envs/Metro.net.xml',
+                  route_file='envs/Metro.rou.xml',
+                  addition_file='envs/Metro.add.xml'
                   )
     env.reset()
+    while True:
+        action = env.action_space.sample()
+        for k, v in enumerate(action[0]):
+            print(k, v)
+        ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
+        ts.get_subscription_result()
+        # obs = ts.compute_observation()
+        # rew = ts.compute_reward()
 
-    action = env.action_space.sample()
-    for k, v in enumerate(action[0]):
-        print(k, v)
-    ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
-    ts.get_subscription_result()
-    # obs = ts.compute_observation()
-    # rew = ts.compute_reward()
-
-    obs, rew, ter, trun, info = env.step(action)
-    print(obs, rew)
+        obs, rew, ter, trun, info = env.step(action)
+        print(obs, rew)

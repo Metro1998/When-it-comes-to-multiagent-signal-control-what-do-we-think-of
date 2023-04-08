@@ -1,5 +1,5 @@
 <additional>
-  <tlLogic id="universal_program" programID="universal_program" offset="0" type="static">
+  <tlLogic id="GS_cluster_9528742117_9528742118" programID="Metro" offset="0" type="actuated">
     <phase duration="100"  state="gGrgrrgGrgrr"/>
     <phase duration="100"  state="grrgGrgrrgGr"/>
     <phase duration="100"  state="grGgrrgrGgrr"/>
@@ -72,5 +72,6 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
   </tlLogic>
 </additional>
