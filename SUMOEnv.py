@@ -77,8 +77,7 @@ class TrafficSignal:
         else:
             executed_stage = int(stage)
         self.stage_old = stage
-        # self.sumo.trafficlight.setPhase(self.id, executed_stage)
-        self.sumo.trafficlight.setPhaseDuration(self.id, float(self.yellow))
+        self.sumo.trafficlight.setPhase(self.id, executed_stage)
         self.sumo.trafficlight.setPhaseDuration(self.id, self.yellow)
         for i in range(self.yellow):
             self.schedule.append(0)
@@ -93,7 +92,7 @@ class TrafficSignal:
         :return:
         """
         if self.schedule[0] > 0:
-            self.sumo.trafficlight.setPhaseDuration(self.id, self.schedule[0].astype(np.float64).item())
+            self.sumo.trafficlight.setPhaseDuration(self.id, self.schedule[0].item())
             # self.sumo.trafficlight.setPhaseDuration(self.id, self.schedule[0])
             for i in range(self.schedule[0] - 1):
                 self.schedule.append(0)
@@ -163,7 +162,6 @@ class SUMOEnv(gym.Env):
                  time_to_teleport: int = -1,
                  max_step_round: int = 10000,
                  max_step_sample: int = 1000000,
-                 hybrid: bool = True
                  ):
 
         # self.action_space = spaces.Tuple((spaces.Discrete(num_stage), spaces.Box(low=min_green, high=max_green, shape=(1,), dtype=np.int64))) * num_agent
@@ -227,9 +225,10 @@ class SUMOEnv(gym.Env):
         :param action:
         :return:
         """
-        for k, v in enumerate(action[0]):
-            # We use s == self.num_stage to indicate that the agent doesn't need to execute at this step.
-            if v != self.num_stage:
+        info = {}
+        for k, v in enumerate(action[1]):
+            # We use stage duration == 0 to indicate that the agent doesn't need to execute at this step.
+            if v != 0:
                 # transfer_matrix
                 self.tls[k].set_stage_duration(action[0][k], action[1][k])
 
@@ -239,7 +238,6 @@ class SUMOEnv(gym.Env):
             # Pop the most left element of the schedule.
             [tl.pop() for tl in self.tls]
             self.step_round += 1
-            print(self.step_round)
             if self.step_round >= self.max_step_episode:
                 self.terminated = True
             # Automatically execute the transition from the yellow stage to green stage, and simultaneously set the end indicator -1.
@@ -247,8 +245,7 @@ class SUMOEnv(gym.Env):
             checks = [tl.check() for tl in self.tls]
             # ids are agents who should act right now.
             if -1 in checks or self.terminated:
-                ids = [k for k, v in enumerate(checks) if v == -1]
-                info = {'incoming': ids}
+                info['agents_to_update'] = -np.array(checks, dtype=np.int64)
                 break
 
         self.step_sample += 1
@@ -322,7 +319,7 @@ class SUMOEnv(gym.Env):
 
         [tl.get_subscription_result() for tl in self.tls]
         observation = np.array([tl.compute_observation() for tl in self.tls]).flatten()
-        info = {}
+        info = {'agents_to_update': np.ones(shape=(self.num_agent, ), dtype=np.int64)}
         return observation, info
 
     def reset_truncated(self):
@@ -344,112 +341,114 @@ class SUMOEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    # env = SUMOEnv(yellow=[3, 3, 3, 3, 3, 3, 3],
-    #               num_stage=8,
-    #               num_agent=7,
-    #               use_gui=False,
-    #               net_file='envs/Metro.net.xml',
-    #               route_file='envs/Metro.rou.xml',
-    #               addition_file='envs/Metro.add.xml'
-    #               )
-    # env.reset()
-    # while True:
-    #     action = env.action_space.sample()
-    #     for k, v in enumerate(action[0]):
-    #         print(k, v)
-    #     for k, v in enumerate(action[1]):
-    #         print(k, v)
-    #     ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
-    #     ts.get_subscription_result()
-    #     # obs = ts.compute_observation()
-    #     # rew = ts.compute_reward()
-    #
-    #     obs, rew, ter, trun, info = env.step(action)
-    #     if ter:
-    #         break
-    envs = gym.vector.AsyncVectorEnv([
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-        lambda: gym.make('sumo-rl-v1',
-                         yellow=[3, 3, 3, 3, 3, 3, 3],
-                         num_stage=8,
-                         num_agent=7,
-                         use_gui=False,
-                         net_file='envs/Metro.net.xml',
-                         route_file='envs/Metro.rou.xml',
-                         addition_file='envs/Metro.add.xml'
-                         ),
-
-    ])
-    a, _ = envs.reset()
+    env = SUMOEnv(yellow=[3, 3, 3, 3, 3, 3, 3],
+                  num_stage=8,
+                  num_agent=7,
+                  use_gui=False,
+                  net_file='envs/Metro.net.xml',
+                  route_file='envs/Metro.rou.xml',
+                  addition_file='envs/Metro.add.xml'
+                  )
+    env.reset()
     while True:
-        action = envs.action_space.sample()
-        print(action)
-        # ts = TrafficSignal(envs.tl_ids[0], 3, env.sumo)
-        # ts.get_subscription_result()
-        # # obs = ts.compute_observation()
-        # # rew = ts.compute_reward()
+        action = env.action_space.sample()
+        # print(env.observation_space.shape[0])
+        # print(env.action_space)
+        # for k, v in enumerate(action[0]):
+        #     print(k, v)
+        # for k, v in enumerate(action[1]):
+        #     print(k, v)
+        ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
+        ts.get_subscription_result()
+        # obs = ts.compute_observation()
+        # rew = ts.compute_reward()
 
-        obs, rew, ter, trun, info = envs.step(action)
+        obs, rew, ter, trun, info = env.step(action)
+        if ter:
+            break
+    # envs = gym.vector.AsyncVectorEnv([
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #     lambda: gym.make('sumo-rl-v1',
+    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
+    #                      num_stage=8,
+    #                      num_agent=7,
+    #                      use_gui=False,
+    #                      net_file='envs/Metro.net.xml',
+    #                      route_file='envs/Metro.rou.xml',
+    #                      addition_file='envs/Metro.add.xml'
+    #                      ),
+    #
+    # ])
+    # a, _ = envs.reset()
+    # while True:
+    #     action = envs.action_space.sample()
+    #     print(action)
+    #     # ts = TrafficSignal(envs.tl_ids[0], 3, env.sumo)
+    #     # ts.get_subscription_result()
+    #     # # obs = ts.compute_observation()
+    #     # # rew = ts.compute_reward()
+    #
+    #     obs, rew, ter, trun, info = envs.step(action)
 
