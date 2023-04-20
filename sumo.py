@@ -686,13 +686,13 @@ class SumoEnvironment(gym.Env):
 
     def _compute_observations(self):
         self.observations.update(
-            {ts: self.traffic_signals[ts].compute_observation() for ts in self.ts_ids}
+            {ts: self.traffic_signals[ts].retrieve_observation() for ts in self.ts_ids}
         )
         return {ts: self.observations[ts].copy() for ts in self.observations.keys()}
 
     def _compute_rewards(self):
         self.rewards.update(
-            {ts: self.traffic_signals[ts].compute_reward() for ts in self.ts_ids}
+            {ts: self.traffic_signals[ts].retrieve_reward() for ts in self.ts_ids}
         )
         return {ts: self.rewards[ts] for ts in self.rewards.keys()}
 

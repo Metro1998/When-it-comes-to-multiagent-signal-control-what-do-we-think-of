@@ -38,14 +38,18 @@ class TrafficSignal:
         # at north and step clockwise then.
         all_lanes = self.sumo.trafficlight.getControlledLinks(self.id)
         self.in_lanes = [conn[0][0] for conn in all_lanes]
+
         # Delete the right turn movement.
         del self.in_lanes[0::3]
         self.out_lanes = [conn[0][1] for conn in all_lanes]
         del self.out_lanes[0::3]
+        print(self.in_lanes)
+        print(self.out_lanes)
 
         self.subscribe()
 
         self.inlane_halting_vehicle_number = None
+        self.inlane_halting_vehicle_waiting_time = None
         self.inlane_halting_vehicle_number_old = None
         self.inlane_waiting_time = None
         self.outlane_halting_vehicle_number = None
@@ -53,14 +57,14 @@ class TrafficSignal:
         self.stage_old = None
 
         self.mapping = np.array([
-            [-1, 8, 9, 10, 11, 12, 13, 14],
-            [15, -1, 16, 17, 18, 19, 20, 21],
-            [22, 23, -1, 24, 25, 26, 27, 28],
-            [29, 30, 31, -1, 32, 33, 34, 35],
-            [36, 37, 38, 39, -1, 40, 41, 42],
-            [43, 44, 45, 46, 47, -1, 48, 49],
-            [50, 51, 52, 53, 54, 55, -1, 56],
-            [57, 58, 59, 60, 61, 62, 63, -1],
+            [64, 8, 9, 10, 11, 12, 13, 14],
+            [15, 65, 16, 17, 18, 19, 20, 21],
+            [22, 23, 66, 24, 25, 26, 27, 28],
+            [29, 30, 31, 67, 32, 33, 34, 35],
+            [36, 37, 38, 39, 68, 40, 41, 42],
+            [43, 44, 45, 46, 47, 69, 48, 49],
+            [50, 51, 52, 53, 54, 55, 70, 56],
+            [57, 58, 59, 60, 61, 62, 63, 71],
         ])
 
     def set_stage_duration(self, stage: int, duration: int):
@@ -122,12 +126,20 @@ class TrafficSignal:
     def get_subscription_result(self):
         self.inlane_halting_vehicle_number = np.array(
             [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.in_lanes])
+
+        self.inlane_halting_vehicle_waiting_time = np.array(
+            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.in_lanes])
+        if sum(self.inlane_halting_vehicle_number) == 0:
+            self.inlane_halting_vehicle_waiting_time = sum(self.inlane_halting_vehicle_waiting_time)
+        else:
+            self.inlane_halting_vehicle_waiting_time = sum(self.inlane_halting_vehicle_waiting_time) / sum(self.inlane_halting_vehicle_number)
+
         # self.inlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.in_lanes]
         self.outlane_halting_vehicle_number = np.array(
             [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.out_lanes])
         # self.outlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.out_lanes]
 
-    def compute_reward(self):
+    def retrieve_reward(self):
         if not isinstance(self.inlane_halting_vehicle_number_old, np.ndarray):
             reward = -sum(self.inlane_halting_vehicle_number)
         else:
@@ -135,9 +147,17 @@ class TrafficSignal:
 
         self.inlane_halting_vehicle_number_old = self.inlane_halting_vehicle_number
 
+        waiting_time = self.inlane_halting_vehicle_waiting_time
+
         return reward
 
-    def compute_observation(self):
+    def retrieve_info(self):
+        queue = self.inlane_halting_vehicle_number
+        waiting_time = self.inlane_halting_vehicle_waiting_time
+
+        return queue, waiting_time
+
+    def retrieve_observation(self):
         observation = self.inlane_halting_vehicle_number - self.outlane_halting_vehicle_number
 
         return observation
@@ -253,8 +273,12 @@ class SUMOEnv(gym.Env):
             self.truncated = True
 
         [tl.get_subscription_result() for tl in self.tls]
-        observation = np.array([tl.compute_observation() for tl in self.tls]).flatten()
-        reward = np.array([tl.compute_reward() for tl in self.tls])
+        observation = np.array([tl.retrieve_observation() for tl in self.tls]).flatten()
+        reward = np.array([tl.retrieve_reward() for tl in self.tls])
+        queue = np.array([sum(tl.retrieve_info()[0]) for tl in self.tls])
+        waiting_time = np.array([tl.retrieve_info()[1] for tl in self.tls])
+        info['queue'] = queue
+        info['waiting_time'] = waiting_time
 
         return observation, reward, self.terminated, self.truncated, info
 
@@ -318,7 +342,7 @@ class SUMOEnv(gym.Env):
         self.start_simulation()
 
         [tl.get_subscription_result() for tl in self.tls]
-        observation = np.array([tl.compute_observation() for tl in self.tls]).flatten()
+        observation = np.array([tl.retrieve_observation() for tl in self.tls]).flatten()
         info = {'agents_to_update': np.ones(shape=(self.num_agent, ), dtype=np.int64)}
         return observation, info
 
@@ -358,12 +382,13 @@ if __name__ == "__main__":
         #     print(k, v)
         # for k, v in enumerate(action[1]):
         #     print(k, v)
-        ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
-        ts.get_subscription_result()
-        # obs = ts.compute_observation()
-        # rew = ts.compute_reward()
+        # ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
+        # ts.get_subscription_result()
+        # obs = ts.retrieve_observation()
+        # rew = ts.retrieve_reward()
 
         obs, rew, ter, trun, info = env.step(action)
+        # print(info)
         if ter:
             break
     # envs = gym.vector.AsyncVectorEnv([
@@ -447,8 +472,8 @@ if __name__ == "__main__":
     #     print(action)
     #     # ts = TrafficSignal(envs.tl_ids[0], 3, env.sumo)
     #     # ts.get_subscription_result()
-    #     # # obs = ts.compute_observation()
-    #     # # rew = ts.compute_reward()
+    #     # # obs = ts.retrieve_observation()
+    #     # # rew = ts.retrieve_reward()
     #
     #     obs, rew, ter, trun, info = envs.step(action)
 

@@ -73,6 +73,15 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 
     <tlLogic id="cluster_271685895_271685900" programID="Metro" offset="0" type="actuated">
@@ -148,6 +157,15 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 
     <tlLogic id="cluster_27127956_27127967_332556586_332556588" programID="Metro" offset="0" type="actuated">
@@ -223,6 +241,15 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 
     <tlLogic id="cluster_26496834_26496835_26496836_26496837" programID="Metro" offset="0" type="actuated">
@@ -298,6 +325,15 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 
     <tlLogic id="cluster_31319857_313481271" programID="Metro" offset="0" type="actuated">
@@ -373,6 +409,15 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 
     <tlLogic id="cluster_262909297_3382408993_3382408994_3382408995" programID="Metro" offset="0" type="actuated">
@@ -448,6 +493,15 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 
 
@@ -524,5 +578,14 @@
     <phase duration="100"  state="grrgrrgrrgyy" next="4"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="5"/>
     <phase duration="100"  state="grrgrrgrrgyy" next="6"/>
+
+    <phase duration="100"  state="gGrgrrgGrgrr" next="0"/>
+    <phase duration="100"  state="grrgGrgrrgGr" next="1"/>
+    <phase duration="100"  state="grGgrrgrGgrr" next="2"/>
+    <phase duration="100"  state="grrgrGgrrgrG" next="3"/>
+    <phase duration="100"  state="gGGgrrgrrgrr" next="4"/>
+    <phase duration="100"  state="grrgGGgrrgrr" next="5"/>
+    <phase duration="100"  state="grrgrrgGGgrr" next="6"/>
+    <phase duration="100"  state="grrgrrgrrgGG" next="7"/>
   </tlLogic>
 </additional>
