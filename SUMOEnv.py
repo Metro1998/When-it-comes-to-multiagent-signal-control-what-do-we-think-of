@@ -255,14 +255,16 @@ class SUMOEnv(gym.Env):
         while True:
             # Just step the simulation.
             self.sumo.simulationStep()
-            # Pop the most left element of the schedule.
-            [tl.pop() for tl in self.tls]
             self.step_round += 1
             if self.step_round >= self.max_step_episode:
                 self.terminated = True
             # Automatically execute the transition from the yellow stage to green stage, and simultaneously set the end indicator -1.
             # Moreover, check() will return the front of the schedule.
             checks = [tl.check() for tl in self.tls]
+
+            # Pop the most left element of the schedule.
+            [tl.pop() for tl in self.tls]
+
             # ids are agents who should act right now.
             if -1 in checks or self.terminated:
                 info['agents_to_update'] = -np.array(checks, dtype=np.int64)
