@@ -1,6 +1,9 @@
+import time
+
 import gymnasium as gym
 import numpy as np
 import libsumo as traci
+# import traci
 import sumolib
 import os
 
@@ -40,12 +43,14 @@ class TrafficSignal:
         self.in_lanes = [conn[0][0] for conn in all_lanes]
 
         # Delete the right turn movement.
-        del self.in_lanes[0::3]
-        self.out_lanes = [conn[0][1] for conn in all_lanes]
-        del self.out_lanes[0::3]
-        print(self.in_lanes)
-        print(self.out_lanes)
 
+        self.out_lanes = [conn[0][1] for conn in all_lanes]
+        del self.in_lanes[0::3]
+        del self.in_lanes[0::2]
+        del self.in_lanes[0::3]
+        del self.out_lanes[0::3]
+        del self.out_lanes[0::2]
+        del self.out_lanes[0::3]
         self.subscribe()
 
         self.inlane_halting_vehicle_number = None
@@ -57,14 +62,14 @@ class TrafficSignal:
         self.stage_old = None
 
         self.mapping = np.array([
-            [64, 8, 9, 10, 11, 12, 13, 14],
-            [15, 65, 16, 17, 18, 19, 20, 21],
-            [22, 23, 66, 24, 25, 26, 27, 28],
-            [29, 30, 31, 67, 32, 33, 34, 35],
-            [36, 37, 38, 39, 68, 40, 41, 42],
-            [43, 44, 45, 46, 47, 69, 48, 49],
-            [50, 51, 52, 53, 54, 55, 70, 56],
-            [57, 58, 59, 60, 61, 62, 63, 71],
+            [-1, 8, 8, 8, 9, 8, 10, 8],
+            [11, -1, 11, 11, 11, 12, 11, 13],
+            [14, 14, -1, 14, 15, 14, 16, 14],
+            [17, 17, 17, -1, 17, 18, 17, 19],
+            [20, 22, 21, 22, -1, 22, 22, 22],
+            [23, 24, 23, 25, 23, -1, 23, 23],
+            [26, 27, 28, 27, 27, 27, -1, 27],
+            [29, 30, 29, 31, 29, 29, 29, -1],
         ])
 
     def set_stage_duration(self, stage: int, duration: int):
@@ -76,17 +81,18 @@ class TrafficSignal:
         set the incoming green stage's duration.
         :return:
         """
-        if isinstance(self.stage_old, int) and self.stage_old != stage:
+        if self.stage_old is not None and self.stage_old != stage:
             executed_stage = int(self.mapping[self.stage_old][stage])
+            self.sumo.trafficlight.setPhase(self.id, executed_stage)
+            for i in range(self.yellow - 1):
+                self.schedule.append(0)
+            self.schedule.append(duration - self.yellow)
         else:
             executed_stage = int(stage)
-        self.stage_old = stage
-        self.sumo.trafficlight.setPhase(self.id, executed_stage)
-        self.sumo.trafficlight.setPhaseDuration(self.id, self.yellow)
-        for i in range(self.yellow):
-            self.schedule.append(0)
-        self.duration = duration
-        self.schedule.append(duration)
+            self.schedule.append(duration - 1)
+
+        self.stage_old = int(stage)
+
 
     def check(self):
         """
@@ -96,8 +102,7 @@ class TrafficSignal:
         :return:
         """
         if self.schedule[0] > 0:
-            self.sumo.trafficlight.setPhaseDuration(self.id, self.schedule[0].item())
-            # self.sumo.trafficlight.setPhaseDuration(self.id, self.schedule[0])
+            self.sumo.trafficlight.setPhase(self.id, self.stage_old)
             for i in range(self.schedule[0] - 1):
                 self.schedule.append(0)
             self.schedule.popleft()
@@ -174,7 +179,7 @@ class SUMOEnv(gym.Env):
                  net_file: str,
                  route_file: str,
                  addition_file: str,
-                 min_green: int = 1,
+                 min_green: int = 10,
                  max_green: int = 40,
                  sumo_seed: Union[str, int] = "random",
                  max_depart_delay: int = -1,
@@ -254,7 +259,10 @@ class SUMOEnv(gym.Env):
 
         while True:
             # Just step the simulation.
+            start = time.time()
             self.sumo.simulationStep()
+            end = time.time()
+            print(end - start)
             self.step_round += 1
             if self.step_round >= self.max_step_episode:
                 self.terminated = True
@@ -277,7 +285,7 @@ class SUMOEnv(gym.Env):
         [tl.get_subscription_result() for tl in self.tls]
         observation = np.array([tl.retrieve_observation() for tl in self.tls]).flatten()
         reward = np.array([tl.retrieve_reward() for tl in self.tls])
-        queue = np.array([sum(tl.retrieve_info()[0]) for tl in self.tls])
+        queue = np.array([sum(tl.retrieve_info()[0]) for tl in self.tls])  # TODO
         waiting_time = np.array([tl.retrieve_info()[1] for tl in self.tls])
         info['queue'] = queue
         info['waiting_time'] = waiting_time
@@ -367,17 +375,25 @@ class SUMOEnv(gym.Env):
 
 
 if __name__ == "__main__":
-    env = SUMOEnv(yellow=[3, 3, 3, 3, 3, 3, 3],
+    env = SUMOEnv(yellow=[3] * 20,
                   num_stage=8,
-                  num_agent=7,
+                  num_agent=20,
                   use_gui=False,
-                  net_file='envs/Metro.net.xml',
-                  route_file='envs/Metro.rou.xml',
-                  addition_file='envs/Metro.add.xml'
+                  net_file='envs/roadnet.net.xml',
+                  route_file='envs/roadnet.rou.xml',
+                  addition_file='envs/roadnet.add.xml'
                   )
     env.reset()
+    info = {'agents_to_update': np.ones(shape=(20, ))}
+    cnt = 0
+    idx = 0
     while True:
         action = env.action_space.sample()
+
+        stage = action[0]
+        duration = np.where(info['agents_to_update'], action[1], np.zeros(shape=(20))).astype(int)
+
+        action = [stage, duration]
         # print(env.observation_space.shape[0])
         # print(env.action_space)
         # for k, v in enumerate(action[0]):
@@ -388,7 +404,7 @@ if __name__ == "__main__":
         # ts.get_subscription_result()
         # obs = ts.retrieve_observation()
         # rew = ts.retrieve_reward()
-
+        print(action)
         obs, rew, ter, trun, info = env.step(action)
         # print(info)
         if ter:
