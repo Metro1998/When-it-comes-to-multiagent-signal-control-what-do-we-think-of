@@ -11,7 +11,7 @@ class PPOTrainer:
 
     def __init__(self, args, buffer, policy):
         """
-        Trainer class for MAT(in hybrid action space) to update policies,
+        Trainer class for MAT (in hybrid action space) to update policies,
         actually it's a standard trainer based PPO.
         :param args:
         :param buffer:
@@ -29,18 +29,19 @@ class PPOTrainer:
         self.batch_size = args.batch_size
         self.entropy_coef_dis = args.entropy_coef_dis
         self.entropy_coef_con = args.entropy_coef_con
-        self.max_grad_norm = args.max_grad_norm
+        self.max_grad_norm = args.max_grad_norm     # gradient clip value, is set to be 0.5 in MAT
         self.target_kl_dis = args.target_kl_dis
         self.target_kl_con = args.target_kl_con
         self.gamma = args.gamma
         self.lam = args.lam
         self.epochs = args.epochs
 
+        # args.adam_eps is set to be 1e-5, recommended by "The 37 Implementation Details of Proximal Policy Optimization"
         self.optimizer_actor_con = torch.optim.Adam([
-            {'params': policy.decoder_con.parameters(), 'lr': args.lr_actor_con},
-            {'params': policy.decoder_con.log_std, 'lr': args.lr_std}])
+            {'params': policy.decoder_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
+            {'params': policy.decoder_con.log_std, 'lr': args.lr_std, 'eps': args.adam_eps}])
         self.optimizer_actor_dis = torch.optim.Adam([
-            {'params': policy.decoder_dis.parameters(), 'lr': args.lr_actor_dis}])
+            {'params': policy.decoder_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps}])
         self.lr_scheduler_actor_con = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_con,
                                                                              gamma=args.lr_decay_rate)
         self.lr_scheduler_actor_dis = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_dis,

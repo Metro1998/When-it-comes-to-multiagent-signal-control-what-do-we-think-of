@@ -47,6 +47,7 @@ def autoregressive_act(decoder, obs_rep, env_num, agent_num, action_dim, action_
     """
     In the rollout phase, it will infer the first action a_1 with a start signal a_0, then insert the back into the
     input and infer the a_2 with [a_0, a_1], and so on till a_n is inferred, aka, autoregressive.
+    :param env_num:
     :param decoder:
     :param obs_rep:
     :param agent_num:

@@ -19,6 +19,27 @@ def init_(m, gain=0.01, activate=False):
     return init(m, nn.init.orthogonal_, lambda x: nn.init.constant_(x, 0), gain=gain)
 
 
+class GRUs(nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, agent_num):
+        super(GRUs, self).__init__()
+        self.grus = nn.ModuleList([nn.GRU(input_dim, hidden_dim, batch_first=True) for _ in range(agent_num)])
+
+    def forward(self, x):
+        """
+
+        :param x: x.shape = (batch_size, agent_num, seq_len, input_dim)
+        :return: (batch_size, agent_num, hidden_dim)
+        """
+
+        ms = []
+        for i in range(x.shape[1]):
+            m = self.grus[i](x[:, i, :, :])[0]
+            ms.append(m[:, -1, :])
+
+        return torch.stack(ms, dim=1)
+
+
 class MultiHeadAttention(nn.Module):
 
     def __init__(self, embd_dim, head_num, agent_num, masked=False):
@@ -41,7 +62,7 @@ class MultiHeadAttention(nn.Module):
         self.att_bp = None
 
     def forward(self, key, value, query):
-        # B: batch_size, L: sequence_length, D: embd_dim
+        # B: batch_size, L: seq_len, D: embd_dim
         B, L, D = query.size()
 
         # calculate query, key, values for all heads in batch and move head evaluate_actions to be the batch dim
@@ -121,14 +142,24 @@ class Encoder(nn.Module):
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
-        self.obs_encoder = nn.Sequential(nn.LayerNorm(obs_dim),
-                                         init_(nn.Linear(obs_dim, embd_dim), activate=True), nn.GELU())
+        self.GRU = GRUs(obs_dim, embd_dim, agent_num)
+
+        self.obs_encoder = nn.Sequential(nn.LayerNorm(embd_dim),
+                                         init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU())
         self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
+
+        # There are agent_num heads, because we approximate state value of each agent separately.
         self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(), nn.LayerNorm(embd_dim),
-                                  init_(nn.Linear(obs_dim, agent_num)))
+                                  init_(nn.Linear(embd_dim, agent_num)))
 
     def forward(self, obs):
+        """
+
+        :param obs: (B, N, seq_len, obs_dim)
+        :return:
+        """
+        obs = self.GRU(obs)  # (B, N, embd_dim)
         obs_embeddings = self.obs_encoder(obs)
         rep = self.blocks(self.ln(obs_embeddings))
         values = self.head(rep)
@@ -148,25 +179,31 @@ class Decoder(nn.Module):
 
         # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
         # and 1 indicates the mean of stage-indexed-duration.
-        self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True), nn.GELU())
-        self.ln = nn.LayerNorm(embd_dim)
+        self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
+                                            nn.GELU())
+        # self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
         self.head_dis = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
                                       nn.LayerNorm(embd_dim),
                                       init_(nn.Linear(embd_dim, action_dim)),
                                       nn.Softmax(dim=-1))
         self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-                                      nn.LayerNorm(embd_dim),
-                                      init_(nn.Linear(embd_dim, action_dim)))
+                                      nn.LayerNorm(embd_dim))
+
+        self.fc_mean = init_(nn.Linear(embd_dim, action_dim))
+        self.fc_std = init_(nn.Linear(embd_dim, action_dim))
 
     def forward(self, hybrid_action, obs_rep):
-        action_embeddings = self.action_encoder(hybrid_action)
-        x = self.ln(action_embeddings)
+        # action_embeddings = self.action_encoder(hybrid_action)
+        # x = self.ln(action_embeddings)
+        x = self.action_encoder(hybrid_action)
         for block in self.blocks:
             x = block(x, obs_rep)
         logits = self.head_dis(x)
-        means = self.head_con(x)
-        return logits, means
+        var_con = self.head_con(x)
+        means = self.fc_mean(var_con)
+        stds = self.fc_std(var_con)
+        return logits, means, stds
 
 
 class MultiAgentTransformer(nn.Module):
@@ -207,10 +244,12 @@ class MultiAgentTransformer(nn.Module):
         """
         batch_size = obs.shape[0]
         obs = check(obs).to(self.device)
-        v_glob, obs_rep = self.encoder(obs)
+        _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num,
-                                                                          self.action_dim, act_dis, act_con, self.device, self.available_actions)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder_dis, self.decoder_con, obs_rep,
+                                                                          batch_size, self.agent_num,
+                                                                          self.action_dim, act_dis, act_con,
+                                                                          self.device, self.available_actions)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -232,36 +271,10 @@ class MultiAgentTransformer(nn.Module):
         :return:
         """
         batch_size = obs.shape[0]
-
         values, obs_rep = self.encoder(obs)
 
         act_dis, logp_dis, act_con, logp_con = \
-            autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim, self.device, self.available_actions)
+            autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim,
+                               self.device, self.available_actions)
 
         return act_con, act_dis, logp_con, logp_dis, values
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
