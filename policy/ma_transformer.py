@@ -135,7 +135,7 @@ class DecodeBlock(nn.Module):
 
 class Encoder(nn.Module):
 
-    def __init__(self, obs_dim, block_num, embd_dim, head_num, agent_num):
+    def __init__(self, obs_dim, embd_dim, block_num, head_num, agent_num):
         super(Encoder, self).__init__()
 
         self.obs_dim = obs_dim
@@ -169,16 +169,14 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, init_log_std):
+    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num):
         super(Decoder, self).__init__()
 
         self.action_dim = action_dim
         self.embd_dim = embd_dim
 
-        self.log_std = nn.Parameter(torch.zeros(action_dim, ) + init_log_std)
-
         # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
-        # and 1 indicates the mean of stage-indexed-duration.
+        # and 1 indicates raw continuous parameter.
         self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
                                             nn.GELU())
         # self.ln = nn.LayerNorm(embd_dim)
@@ -199,16 +197,16 @@ class Decoder(nn.Module):
         x = self.action_encoder(hybrid_action)
         for block in self.blocks:
             x = block(x, obs_rep)
-        logits = self.head_dis(x)
+        logits = self.head_dis(x)  # (B, N, action_dim)
         var_con = self.head_con(x)
-        means = self.fc_mean(var_con)
+        means = self.fc_mean(var_con)  # (B, N, action_dim)
         stds = self.fc_std(var_con)
         return logits, means, stds
 
 
 class MultiAgentTransformer(nn.Module):
 
-    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, init_log_std, available_action):
+    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, available_action):
         """
 
         :param obs_dim:
@@ -217,8 +215,6 @@ class MultiAgentTransformer(nn.Module):
         :param agent_num:
         :param block_num:
         :param head_num:
-        :param init_log_std:
-        :param available_action: (np.ndarray) (batch_size, agent_num, action_dim)
         """
         super(MultiAgentTransformer, self).__init__()
 
@@ -227,19 +223,20 @@ class MultiAgentTransformer(nn.Module):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.available_action = check(available_action).to(self.device)
 
-        self.encoder = Encoder(obs_dim, block_num, embd_dim, head_num, agent_num)
         # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
         # each other, so are they in MAT.
-        self.decoder = Decoder(action_dim, embd_dim, block_num, head_num, agent_num, init_log_std)
+        self.encoder = Encoder(obs_dim, embd_dim, block_num, head_num, agent_num)
+        self.decoder = Decoder(action_dim, embd_dim, block_num, head_num, agent_num)
 
         self.to(self.device)
 
-    def evaluate_actions(self, obs, act_dis, act_con):
+    def evaluate_actions(self, obs, act_dis, act_con, available_actions):
         """
         Get action logprobs / entropy for actor update.
         :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)
         :param act_dis: (torch.Tensor) (batch_size, agent_num)
         :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
+        :param available_actions: (np.ndarray) (batch_size, agent_num, action_dim)
         :return:
         """
         batch_size = obs.shape[0]
@@ -267,11 +264,12 @@ class MultiAgentTransformer(nn.Module):
     def act(self, obs):
         """
         Compute stages and value function predictions for the given inputs.
-        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)
+        :param obs: (np.ndarray) (batch_size/env_num, agent_num, obs_dim)
         :return:
         """
-        batch_size = obs.shape[0]
+        obs = check(obs).to(self.device)
         values, obs_rep = self.encoder(obs)
+        batch_size = obs.shape[0]
 
         act_dis, logp_dis, act_con, logp_con = \
             autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim,
