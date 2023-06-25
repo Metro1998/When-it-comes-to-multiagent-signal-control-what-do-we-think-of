@@ -1,3 +1,4 @@
+import copy
 import math
 import numpy as np
 import torch
@@ -169,7 +170,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num):
+    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, std_clip):
         super(Decoder, self).__init__()
 
         self.action_dim = action_dim
@@ -180,33 +181,42 @@ class Decoder(nn.Module):
         self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
                                             nn.GELU())
         # self.ln = nn.LayerNorm(embd_dim)
-        self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
+        self.blocks_dis = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
+        self.blocks_con = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
+
         self.head_dis = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
                                       nn.LayerNorm(embd_dim),
                                       init_(nn.Linear(embd_dim, action_dim)),
                                       nn.Softmax(dim=-1))
+
         self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
                                       nn.LayerNorm(embd_dim))
-
         self.fc_mean = init_(nn.Linear(embd_dim, action_dim))
         self.fc_std = init_(nn.Linear(embd_dim, action_dim))
 
+        self.std_clip = std_clip
+
     def forward(self, hybrid_action, obs_rep):
-        # action_embeddings = self.action_encoder(hybrid_action)
         # x = self.ln(action_embeddings)
-        x = self.action_encoder(hybrid_action)
-        for block in self.blocks:
+        action_embeddings = self.action_encoder(hybrid_action)
+
+        x = action_embeddings
+        for block in self.blocks_dis:
             x = block(x, obs_rep)
         logits = self.head_dis(x)  # (B, N, action_dim)
+
+        x = action_embeddings
+        for block in self.blocks_con:
+            x = block(x, obs_rep)
         var_con = self.head_con(x)
         means = self.fc_mean(var_con)  # (B, N, action_dim)
-        stds = self.fc_std(var_con)
+        stds = torch.clamp(F.softmax(self.fc_std(var_con)), min=self.std_clip[0], max=self.std_clip[1])
         return logits, means, stds
 
 
 class MultiAgentTransformer(nn.Module):
 
-    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, available_action):
+    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, std_clip, max_green, device):
         """
 
         :param obs_dim:
@@ -215,38 +225,41 @@ class MultiAgentTransformer(nn.Module):
         :param agent_num:
         :param block_num:
         :param head_num:
+        :param std_clip:
+        :param max_green:
+        :param device:
         """
         super(MultiAgentTransformer, self).__init__()
 
-        self.agent_num = agent_num
         self.action_dim = action_dim
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.available_action = check(available_action).to(self.device)
+        self.agent_num = agent_num
+        self.std_clip = std_clip
+        self.max_green = max_green
+        self.device = device
 
         # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
         # each other, so are they in MAT.
         self.encoder = Encoder(obs_dim, embd_dim, block_num, head_num, agent_num)
-        self.decoder = Decoder(action_dim, embd_dim, block_num, head_num, agent_num)
+        self.decoder = Decoder(action_dim, embd_dim, block_num, head_num, agent_num, std_clip)
 
         self.to(self.device)
 
-    def evaluate_actions(self, obs, act_dis, act_con, available_actions):
+    def evaluate_actions(self, obs, act_dis, act_con, decision_flag):
         """
         Get action logprobs / entropy for actor update.
-        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)
+
+        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)  they will be preprocessed in the buffer, specifically from numpy to tensor.
         :param act_dis: (torch.Tensor) (batch_size, agent_num)
         :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
-        :param available_actions: (np.ndarray) (batch_size, agent_num, action_dim)
+        :param decision_flag: : (torch.tensor) (batch_size, agent_num, action_dim)
         :return:
         """
         batch_size = obs.shape[0]
-        obs = check(obs).to(self.device)
         _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder_dis, self.decoder_con, obs_rep,
-                                                                          batch_size, self.agent_num,
-                                                                          self.action_dim, act_dis, act_con,
-                                                                          self.device, self.available_actions)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder, obs_rep, batch_size, self.agent_num,
+                                                                          self.action_dim, act_dis, act_con, decision_flag,
+                                                                          self.device)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -261,18 +274,23 @@ class MultiAgentTransformer(nn.Module):
 
         return values
 
-    def act(self, obs):
+    def act(self, obs, last_act_dis, last_act_con):
         """
         Compute stages and value function predictions for the given inputs.
-        :param obs: (np.ndarray) (batch_size/env_num, agent_num, obs_dim)
+        :param obs:
+        :param last_act_dis: the last step's discrete actions, for masking the discrete action space if it time to act.
+        :param last_act_con: the last step's continuous actions, for deciding whether to infer(map2real(last_act_con) < 0.1) on the current step.
         :return:
         """
         obs = check(obs).to(self.device)
+        last_act_dis = check(last_act_dis).to(self.device)
+        last_act_con = check(last_act_con).to(self.device)
+
         values, obs_rep = self.encoder(obs)
-        batch_size = obs.shape[0]
+        env_num = obs.shape[0]
 
         act_dis, logp_dis, act_con, logp_con = \
-            autoregressive_act(self.decoder_dis, self.decoder_con, obs_rep, batch_size, self.agent_num, self.action_dim,
-                               self.device, self.available_actions)
+            autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, last_act_dis, last_act_con,
+                               self.max_green, self.device)
 
         return act_con, act_dis, logp_con, logp_dis, values

@@ -116,7 +116,7 @@ def autoregressive_act(decoder, obs_rep, env_num, agent_num, action_dim, action_
     return output_action, output_action_logp  # [env_num, agent_num, 2]
 
 
-def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, decision_flag, max_green, device):
+def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, decision_flag, device):
     """
     In the training process, this function get input of sequence [a_0, a_1, ..., a_n-1] and predict [a_1, a_2, ..., a_n]
     simultaneously in one evaluate_actions process, aka, teaching force.
@@ -130,7 +130,6 @@ def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis
     :param action_con: [batch_size, agent_num]
     :param decision_flag: [batch_size, agent_num] to indicate whether it's time to make a decision or to infer,
     if it's time to make a decision, mask the last discrete choice
-    :param max_green:
     :param device:
     :return:
     """
@@ -157,12 +156,12 @@ def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis
     return act_logp_dis, entropy_dis, act_logp_con, entropy_con
 
 
-def batchify_obs(obs, device):
-    """
-    Converts dic style observations to batch of torch arrays.
-    :param obs:
-    :param device:
-    :return:
-    """
-    obs = np.stack([obs[o] for o in obs], axis=0)
-    obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
+# def batchify_obs(obs, device):
+#     """
+#     Converts dic style observations to batch of torch arrays.
+#     :param obs:
+#     :param device:
+#     :return:
+#     """
+#     obs = np.stack([obs[o] for o in obs], axis=0)
+#     obs = torch.as_tensor(obs, dtype=torch.float32, device=device)
