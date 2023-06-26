@@ -1,5 +1,3 @@
-import time
-
 import gymnasium as gym
 import numpy as np
 import libsumo as traci
@@ -21,12 +19,12 @@ class TrafficSignal:
 
     IMPORTANT!!! NOTE THAT
     Our reward is defined as the change in vehicle number of one specific junction.
-    Our state is defined as the pressure between the inlanes and outlanes.
     """
 
-    def __init__(self, tl_id, yellow, sumo):
+    def __init__(self, tl_id, pattern, yellow, sumo):
 
         self.id = tl_id
+        self.pattern = pattern
         self.yellow = yellow
         self.sumo = sumo
 
@@ -59,7 +57,7 @@ class TrafficSignal:
         self.inlane_waiting_time = None
         self.outlane_halting_vehicle_number = None
         self.outlane_waiting_time = None
-        self.stage_old = None
+        self.stage_old = np.random.randint(0, 8)
 
         self.mapping = np.array([
             [-1, 8, 8, 8, 9, 8, 10, 8],
@@ -81,18 +79,15 @@ class TrafficSignal:
         set the incoming green stage's duration.
         :return:
         """
-        if self.stage_old is not None and self.stage_old != stage:
-            executed_stage = int(self.mapping[self.stage_old][stage])
-            self.sumo.trafficlight.setPhase(self.id, executed_stage)
-            for i in range(self.yellow - 1):
+        if self.stage_old != stage:
+            yellow_stage = int(self.mapping[self.stage_old][stage])
+            self.sumo.trafficlight.setPhase(self.id, yellow_stage)
+            for i in range(self.yellow):
                 self.schedule.append(0)
             self.schedule.append(duration - self.yellow)
+            self.stage_old = int(stage)
         else:
-            executed_stage = int(stage)
-            self.schedule.append(duration - 1)
-
-        self.stage_old = int(stage)
-
+            self.schedule.append(duration)
 
     def check(self):
         """
@@ -103,7 +98,7 @@ class TrafficSignal:
         """
         if self.schedule[0] > 0:
             self.sumo.trafficlight.setPhase(self.id, self.stage_old)
-            for i in range(self.schedule[0] - 1):
+            for i in range(self.schedule[0]):
                 self.schedule.append(0)
             self.schedule.popleft()
             self.schedule.append(-1)
@@ -130,19 +125,19 @@ class TrafficSignal:
 
     def get_subscription_result(self):
         self.inlane_halting_vehicle_number = np.array(
-            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.in_lanes])
+            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.in_lanes], dtype=np.int32)
 
         self.inlane_halting_vehicle_waiting_time = np.array(
-            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.in_lanes])
+            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.in_lanes], dtype=np.float32)
+
         if sum(self.inlane_halting_vehicle_number) == 0:
             self.inlane_halting_vehicle_waiting_time = sum(self.inlane_halting_vehicle_waiting_time)
         else:
             self.inlane_halting_vehicle_waiting_time = sum(self.inlane_halting_vehicle_waiting_time) / sum(self.inlane_halting_vehicle_number)
 
-        # self.inlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.in_lanes]
-        self.outlane_halting_vehicle_number = np.array(
-            [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.out_lanes])
-        # self.outlane_waiting_time = [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[1] for lane_id in self.out_lanes]
+        # Temporary comment out for the efficiency.
+        # self.outlane_halting_vehicle_number = np.array(
+        #     [list(self.sumo.lane.getSubscriptionResults(lane_id).values())[0] for lane_id in self.out_lanes])
 
     def retrieve_reward(self):
         if not isinstance(self.inlane_halting_vehicle_number_old, np.ndarray):
@@ -152,8 +147,6 @@ class TrafficSignal:
 
         self.inlane_halting_vehicle_number_old = self.inlane_halting_vehicle_number
 
-        waiting_time = self.inlane_halting_vehicle_waiting_time
-
         return reward
 
     def retrieve_info(self):
@@ -162,10 +155,17 @@ class TrafficSignal:
 
         return queue, waiting_time
 
-    def retrieve_observation(self):
-        observation = self.inlane_halting_vehicle_number - self.outlane_halting_vehicle_number
+    def retrieve_queue(self):
+        if self.pattern == 'pressure':
+            observation = self.inlane_halting_vehicle_number - self.outlane_halting_vehicle_number
+        elif self.pattern == 'queue':
+            observation = self.inlane_halting_vehicle_number
 
         return observation
+
+    def retrieve_stage(self):
+
+        return self.stage_old
 
 
 class SUMOEnv(gym.Env):
@@ -181,6 +181,7 @@ class SUMOEnv(gym.Env):
                  addition_file: str,
                  min_green: int = 10,
                  max_green: int = 40,
+                 pattern = 'queue',
                  sumo_seed: Union[str, int] = "random",
                  max_depart_delay: int = -1,
                  waiting_time_memory: int = 1000,
@@ -188,9 +189,6 @@ class SUMOEnv(gym.Env):
                  max_step_round: int = 10000,
                  max_step_sample: int = 1000000,
                  ):
-
-        # self.action_space = spaces.Tuple((spaces.Discrete(num_stage), spaces.Box(low=min_green, high=max_green, shape=(1,), dtype=np.int64))) * num_agent
-        # self.observation_space = spaces.Box(low=-100, high=100, shape=(num_agent, num_stage), dtype=np.int64)
 
         self.yellow = yellow
         self.use_gui = use_gui
@@ -203,6 +201,7 @@ class SUMOEnv(gym.Env):
         self.num_agent = num_agent
         self.min_green = min_green
         self.max_green = max_green
+        self.pattern = pattern
         self.max_step_episode = max_step_round
         # Whether the truncation condition outside the scope of the MDP is satisfied.
         self.max_step_sample = max_step_sample
@@ -223,26 +222,30 @@ class SUMOEnv(gym.Env):
         self.sumo = None
         self.tl_ids = None
         self.tls = None
-        self.observations = None
         self.rewards = None
         self.terminated = False
         self.truncated = False
+        self.reward_idx = None
 
     @property
     def observation_space(self):
         """Return the observation space of a traffic signal.
         Only used in case of single-agent environment.
         """
-        return spaces.Box(low=-100, high=100, shape=(self.num_agent * self.num_stage, ), dtype=np.int32)
+        return spaces.Dict({
+            'stage': spaces.MultiDiscrete(np.array([self.num_stage] * self.num_agent), dtype=np.int32),
+            'queue': spaces.Box(low=-100, high=100, shape=(self.num_agent * self.num_stage, ), dtype=np.int32),
+        })
 
     @property
     def action_space(self):
         """Return the action space of a traffic signal.
         Only used in case of single-agent environment.
         """
-        return spaces.Tuple((spaces.MultiDiscrete(np.array([self.num_stage] * self.num_agent)),
-                             spaces.Box(low=self.min_green, high=self.max_green, shape=(self.num_agent,),
-                                        dtype=np.int64)))
+        return spaces.Dict({
+            'stage': spaces.MultiDiscrete(np.array([self.num_stage] * self.num_agent), dtype=np.int32),
+            'duration': spaces.Box(low=self.min_green, high=self.max_green, shape=(self.num_agent,), dtype=np.int32)
+        })
 
     def step(self, action):
         """
@@ -250,6 +253,7 @@ class SUMOEnv(gym.Env):
         :param action:
         :return:
         """
+        # TODO how about action!!!
         info = {}
         for k, v in enumerate(action[1]):
             # We use stage duration == 0 to indicate that the agent doesn't need to execute at this step.
@@ -259,10 +263,7 @@ class SUMOEnv(gym.Env):
 
         while True:
             # Just step the simulation.
-            start = time.time()
             self.sumo.simulationStep()
-            end = time.time()
-            print(end - start)
             self.step_round += 1
             if self.step_round >= self.max_step_episode:
                 self.terminated = True
@@ -275,22 +276,24 @@ class SUMOEnv(gym.Env):
 
             # ids are agents who should act right now.
             if -1 in checks or self.terminated:
+                self.step_sample += 1
+                [tl.get_subscription_result() for tl in self.tls]
                 info['agents_to_update'] = -np.array(checks, dtype=np.int64)
+                # reward_idx (list) is the index for recomputing reward.
+                # For example, if the reward fraction for one agent is [3, 2, 1, 5, 6], and the reward_idx is [0, 3, 5], then the final reward for this agent is [6, 3, 1, 11, 6]
+                [self.reward_idx[i].append(self.step_sample) for i in range(self.num_agent) if info['agents_to_update'][i] == 1]
+                reward = np.array([self.tls[i].retrieve_reward() for i in range(self.num_agent)])
                 break
 
-        self.step_sample += 1
-        if self.step_round >= self.max_step_sample:
-            self.truncated = True
+        observation = {'queue': np.array([tl.retrieve_queue() for tl in self.tls]).flatten(),
+                       'stage': np.array([tl.retrieve_stage() for tl in self.tls]).flatten()}
+        # For performance evaluation
+        info['queue'] = np.array([sum(tl.retrieve_info()[0]) for tl in self.tls])
+        info['waiting_time'] = np.array([tl.retrieve_info()[1] for tl in self.tls])
+        # For calculating reward
+        info['reward_idx'] = self.reward_idx
 
-        [tl.get_subscription_result() for tl in self.tls]
-        observation = np.array([tl.retrieve_observation() for tl in self.tls]).flatten()
-        reward = np.array([tl.retrieve_reward() for tl in self.tls])
-        queue = np.array([sum(tl.retrieve_info()[0]) for tl in self.tls])  # TODO
-        waiting_time = np.array([tl.retrieve_info()[1] for tl in self.tls])
-        info['queue'] = queue
-        info['waiting_time'] = waiting_time
-
-        return observation, reward, self.terminated, self.truncated, info
+        return observation, reward, self.terminated, info
 
     def start_simulation(self):
         """
@@ -332,7 +335,7 @@ class SUMOEnv(gym.Env):
             self.sumo.gui.setSchema(traci.gui.DEFAULT_VIEW, "real world")
 
         self.tl_ids = list(self.sumo.trafficlight.getIDList())
-        self.tls = [TrafficSignal(tl_id, yellow, self.sumo) for tl_id, yellow in zip(self.tl_ids, self.yellow)]
+        self.tls = [TrafficSignal(tl_id, self.pattern, yellow, self.sumo) for tl_id, yellow in zip(self.tl_ids, self.yellow)]
 
     def reset(self, seed: Optional[int] = None, **kwargs):
         """
@@ -351,8 +354,11 @@ class SUMOEnv(gym.Env):
             self.sumo_seed = seed
         self.start_simulation()
 
+        self.reward_idx = [[0] for _ in range(self.num_agent)]
+
         [tl.get_subscription_result() for tl in self.tls]
-        observation = np.array([tl.retrieve_observation() for tl in self.tls]).flatten()
+        observation = {'queue': np.array([tl.retrieve_queue() for tl in self.tls]).flatten(),
+                       'stage': np.array([tl.retrieve_stage() for tl in self.tls]).flatten()}
         info = {'agents_to_update': np.ones(shape=(self.num_agent, ), dtype=np.int64)}
         return observation, info
 
@@ -372,126 +378,4 @@ class SUMOEnv(gym.Env):
         if not LIBSUMO:
             traci.switch(self.label)
         traci.close()
-
-
-if __name__ == "__main__":
-    env = SUMOEnv(yellow=[3] * 20,
-                  num_stage=8,
-                  num_agent=20,
-                  use_gui=False,
-                  net_file='envs/roadnet.net.xml',
-                  route_file='envs/roadnet.rou.xml',
-                  addition_file='envs/roadnet.add.xml'
-                  )
-    env.reset()
-    info = {'agents_to_update': np.ones(shape=(20, ))}
-    cnt = 0
-    idx = 0
-    while True:
-        action = env.action_space.sample()
-
-        stage = action[0]
-        duration = np.where(info['agents_to_update'], action[1], np.zeros(shape=(20))).astype(int)
-
-        action = [stage, duration]
-        # print(env.observation_space.shape[0])
-        # print(env.action_space)
-        # for k, v in enumerate(action[0]):
-        #     print(k, v)
-        # for k, v in enumerate(action[1]):
-        #     print(k, v)
-        # ts = TrafficSignal(env.tl_ids[0], 3, env.sumo)
-        # ts.get_subscription_result()
-        # obs = ts.retrieve_observation()
-        # rew = ts.retrieve_reward()
-        print(action)
-        obs, rew, ter, trun, info = env.step(action)
-        # print(info)
-        if ter:
-            break
-    # envs = gym.vector.AsyncVectorEnv([
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #     lambda: gym.make('sumo-rl-v1',
-    #                      yellow=[3, 3, 3, 3, 3, 3, 3],
-    #                      num_stage=8,
-    #                      num_agent=7,
-    #                      use_gui=False,
-    #                      net_file='envs/Metro.net.xml',
-    #                      route_file='envs/Metro.rou.xml',
-    #                      addition_file='envs/Metro.add.xml'
-    #                      ),
-    #
-    # ])
-    # a, _ = envs.reset()
-    # while True:
-    #     action = envs.action_space.sample()
-    #     print(action)
-    #     # ts = TrafficSignal(envs.tl_ids[0], 3, env.sumo)
-    #     # ts.get_subscription_result()
-    #     # # obs = ts.retrieve_observation()
-    #     # # rew = ts.retrieve_reward()
-    #
-    #     obs, rew, ter, trun, info = envs.step(action)
 

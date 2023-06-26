@@ -686,7 +686,7 @@ class SumoEnvironment(gym.Env):
 
     def _compute_observations(self):
         self.observations.update(
-            {ts: self.traffic_signals[ts].retrieve_observation() for ts in self.ts_ids}
+            {ts: self.traffic_signals[ts].retrieve_queue() for ts in self.ts_ids}
         )
         return {ts: self.observations[ts].copy() for ts in self.observations.keys()}
 
