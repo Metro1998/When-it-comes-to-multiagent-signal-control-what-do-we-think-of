@@ -3,23 +3,26 @@ reference: https://github.com/PKU-MARL/Multi-Agent-Transformer/blob/main/mat/alg
 """
 import torch
 import torch.nn as nn
+from typing import List
+
 from utils.util import *
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 
 
 class PPOTrainer:
 
-    def __init__(self, args, buffer, policy):
+    def __init__(self, args, buffer, policy_gpu, policy_cpu):
         """
-        Trainer class for MAT (in hybrid action space) to update policies,
-        actually it's a standard trainer based PPO.
+
         :param args:
         :param buffer:
-        :param policy:
+        :param policy_gpu: for policy update in the gpu
+        :param policy_cpu: for environment interaction in the cpu
         """
 
         self.buffer = buffer
-        self.policy = policy
+        self.policy_gpu = policy_gpu
+        self.policy_cpu = policy_cpu
 
         self.random_seed = args.random_seed
         self.agents_num = args.agents_num
@@ -29,7 +32,7 @@ class PPOTrainer:
         self.batch_size = args.batch_size
         self.entropy_coef_dis = args.entropy_coef_dis
         self.entropy_coef_con = args.entropy_coef_con
-        self.max_grad_norm = args.max_grad_norm     # gradient clip value, is set to be 0.5 in MAT
+        self.max_grad_norm = args.max_grad_norm  # gradient clip value, is set to be 0.5 in MAT
         self.target_kl_dis = args.target_kl_dis
         self.target_kl_con = args.target_kl_con
         self.gamma = args.gamma
@@ -38,16 +41,16 @@ class PPOTrainer:
 
         # args.adam_eps is set to be 1e-5, recommended by "The 37 Implementation Details of Proximal Policy Optimization"
         self.optimizer_actor_con = torch.optim.Adam([
-            {'params': policy.decoder_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
-            {'params': policy.decoder_con.log_std, 'lr': args.lr_std, 'eps': args.adam_eps}])
+            {'params': policy_gpu.decoder_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
+            {'params': policy_gpu.decoder_con.log_std, 'lr': args.lr_std, 'eps': args.adam_eps}])
         self.optimizer_actor_dis = torch.optim.Adam([
-            {'params': policy.decoder_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps}])
+            {'params': policy_gpu.decoder_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps}])
         self.lr_scheduler_actor_con = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_con,
                                                                              gamma=args.lr_decay_rate)
         self.lr_scheduler_actor_dis = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_dis,
                                                                              gamma=args.lr_decay_rate)
 
-        self.optimizer_critic = torch.optim.Adam([{'params': policy.encoder.parameters(), 'lr': args.lr_critic}])
+        self.optimizer_critic = torch.optim.Adam([{'params': policy_gpu.encoder.parameters(), 'lr': args.lr_critic}])
         self.lr_scheduler_critic = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_critic,
                                                                           gamma=args.lr_decay_rate)
         self.loss_func = nn.SmoothL1Loss(reduction='mean')
@@ -80,31 +83,57 @@ class PPOTrainer:
                 adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8)
 
                 ### Update encoder ###
+                ## Calculate the gradient of critic ##
+                predicted_values = self.policy_gpu.get_values(obs_batch)
+                critic_loss = self.loss_func(predicted_values, ret_batch)
                 self.optimizer_critic.zero_grad()
-                critic_loss = self.cal_critic_loss(obs_batch, ret_batch)
                 critic_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.policy.encoder.parameters(), norm_type=2,
+                torch.nn.utils.clip_grad_norm_(self.policy_gpu.encoder.parameters(), norm_type=2,
                                                max_norm=self.max_grad_norm)
                 self.optimizer_critic.step()
 
                 ### Update decoders ###
-                new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy.evaluate_actions(obs_batch,
-                                                                                                                act_dis_batch,
-                                                                                                                act_con_batch)
+                new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy_gpu.evaluate_actions(
+                    obs_batch,
+                    act_dis_batch,
+                    act_con_batch)
+
                 if update_dis_actor:
-                    loss_pi_dis, approx_kl_dis = self.cal_actor_dis_loss(old_logp_dis_batch, new_logp_dis_batch,
-                                                                         entropy_dis, adv_batch)
+                    ## Calculate the gradient of discrete actor ##
+                    imp_weights = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
+                    surr1 = imp_weights * adv_batch
+                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_batch
+                    loss_pi_dis = - (torch.min(surr1, surr2) + self.entropy_coef_dis * entropy_dis).mean()
+
+                    with torch.no_grad():
+                        # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
+                        approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
+
                     self.optimizer_actor_dis.zero_grad()
                     loss_pi_dis.backward()
-                    torch.nn.utils.clip_grad_norm_(self.policy.decoder_dis.parameters(), norm_type=2, max_norm=self.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(self.policy_gpu.decoder_dis.parameters(), norm_type=2, max_norm=self.max_grad_norm)
                     self.optimizer_actor_dis.step()
 
                 if update_con_actor:
-                    loss_pi_con, approx_kl_con = self.cal_actor_con_loss(act_dis_batch, old_logp_con_batch, new_logp_con_batch, adv_batch)
+                    ## Calculate the gradient of continuous actor ##
+                    old_logp_con_batch = old_logp_con_batch.gather(1, act_dis_batch.view(-1, 1)).squeeze()
+                    new_logp_con_batch = new_logp_con_batch.gather(1, act_dis_batch.view(-1, 1)).squeeze()
+
+                    imp_weights = torch.exp(new_logp_con_batch - old_logp_con_batch)
+                    surr1 = imp_weights * adv_batch
+                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_batch
+
+                    # Andrychowicz, et al. (2021) overall find no evidence that the entropy term improves performance on
+                    # continuous control environments.
+                    loss_pi_con = - torch.min(surr1, surr2).mean()
+
+                    with torch.no_grad():
+                        # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                        approx_kl_con = ((imp_weights - 1) - (new_logp_con_batch - old_logp_con_batch)).mean()
 
                     self.optimizer_actor_con.zero_grad()
                     loss_pi_con.backward()
-                    torch.nn.utils.clip_grad_norm_(self.policy.decoder_con.parameters(), norm_type=2, max_norm=self.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(self.policy_gpu.decoder_con.parameters(), norm_type=2, max_norm=self.max_grad_norm)
                     self.optimizer_actor_con.step()
 
             if approx_kl_dis > self.target_kl_dis:
@@ -122,6 +151,7 @@ class PPOTrainer:
         :param end_idx:
         :return:
         """
+        # TODO: policy_gpu
         # (num_steps, num_agents, obs_dim) --> (num_steps)
         value = self.policy.encoder(check(observation)).squeeze().detach().numpy()
         # (num_steps, num_agents) --> (num_steps)
@@ -141,67 +171,14 @@ class PPOTrainer:
 
         return advantage, return_
 
-    def cal_critic_loss(self, obs_batch, ret_batch):
-        """
-        Calculate the loss of critic
-
-        :param obs_batch:
-        :param ret_batch:
-        :return:
-        """
-        predicted_values = self.policy.get_values(obs_batch)
-        critic_loss = self.loss_func(predicted_values, ret_batch)
-        return critic_loss
-
-    def cal_actor_dis_loss(self, old_logp_dis_batch, new_logp_dis_batch, entropy_dis, adv_batch):
-        """
-
-        :param old_logp_dis_batch:
-        :param new_logp_dis_batch:
-        :param entropy_dis:
-        :param adv_batch:
-        :return:
-        """
-        imp_weights = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
-        surr1 = imp_weights * adv_batch
-        surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_batch
-        loss_pi_dis = - (torch.min(surr1, surr2) + self.entropy_coef_dis * entropy_dis).mean()
-
-        with torch.no_grad():
-            # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
-            approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
-
-        return loss_pi_dis, approx_kl_dis
-
-    def cal_actor_con_loss(self, act_dis_batch, old_logp_con_batch, new_logp_con_batch, adv_batch):
-        """
-
-        :param act_dis_batch:
-        :param old_logp_con_batch:
-        :param new_logp_con_batch:
-        :param adv_batch:
-        :return:
-        """
-        old_logp_con_batch = old_logp_con_batch.gather(1, act_dis_batch.view(-1, 1)).squeeze()
-        new_logp_con_batch = new_logp_con_batch.gather(1, act_dis_batch.view(-1, 1)).squeeze()
-
-        imp_weights = torch.exp(new_logp_con_batch - old_logp_con_batch)
-        surr1 = imp_weights * adv_batch
-        surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_batch
-
-        # Andrychowicz, et al. (2021) overall find no evidence that the entropy term improves performance on
-        # continuous control environments.
-        loss_pi_con = - torch.min(surr1, surr2).mean()
-
-        with torch.no_grad():
-            # calculate approx_kl http://joschu.net/blog/kl-approx.html
-            approx_kl_con = ((imp_weights - 1) - (new_logp_con_batch - old_logp_con_batch)).mean()
-
-        return loss_pi_con, approx_kl_con
-
-
     def save(self, save_dir, episode):
-        torch.save(self.policy.state_dict(), str(save_dir) + "/MAT_" + str(episode) + ".pt")
+        torch.save(self.policy_gpu.state_dict(), str(save_dir) + "/MAT_GPU_" + str(episode) + ".pt")
+        torch.save(self.policy_cpu.satet_dict(), str(save_dir) + "/MAT_CPU_" + str(episode) + ".pt")
 
-    def load(self, model_dir):
-        self.policy.load_state_dict(torch.load(model_dir))
+    def load(self, model_dir_gpu, model_dir_cpu):
+        self.policy_gpu.load_state_dict(torch.load(model_dir_gpu))
+        self.policy_cpu.load_state_dict(torch.load(model_dir_cpu))
+
+    def copy_parameter(self):
+        source_params = torch.nn.utils.parameters_to_vector(self.policy_gpu.parameters())
+        torch.nn.utils.vector_to_parameters(source_params, self.policy_cpu.parameters())
