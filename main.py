@@ -4,6 +4,7 @@ import time
 from utils.util import *
 from policy.ma_transformer import MultiAgentTransformer
 from policy.ma_transformer_trainer import PPOTrainer
+
 # from policy.rollout_buffer import
 
 if __name__ == '__main__':
@@ -42,11 +43,10 @@ if __name__ == '__main__':
                              addition_file=local_addition_file,
                              pattern=pattern,
                              max_step_episode=500,
+
                              ) for i in range(env_num)
 
-
     ])
-
 
     # env = gym.make('sumo-rl-v1',
     #                yellow=[yellow] * agent_num,
@@ -62,7 +62,8 @@ if __name__ == '__main__':
     while True:
         random_numbers = np.random.randint(low=[0, 10], high=[8, 41], size=(12, 20, 2))
         action = {'duration': random_numbers[:, :, 1], 'stage': random_numbers[:, :, 0]}
-        obs, reward, t, _, _ = env.step(action)
+        obs, reward, t, _, info = env.step(action)
+        print(info['critical_step_idx'])
         if True in t:
             print(t)
             print('----------------------------------------------------------------------------------------')
@@ -74,14 +75,20 @@ if __name__ == '__main__':
         next_obs, _ = env.reset()
 
         while True:
+            # Retrieve the current observation, and transfer it to GRU. Utilize the deque implementation
             obs = batchify_obs(next_obs, device=self.device)
 
             # Get action from the agent
             act_con, act_dis, logp_dis, logp_con = agent.get_action(obs)
 
             # Execute the environment and log data
-            next_obs, rewards, terms, truncs, infos = env.step(
+            next_obs, reward, termi, trunc, info = env.step()
 
-            )
+            buffer.store_trajectories(obs, rewards, act_con, act_dis, logp_con, logp_dis)
 
-            agent.buffer.store_trajectories(obs, rewards, act_con, act_dis, logp_con, logp_dis)
+            if termi or trunc:
+                buffer.finish_path(info[reward_idx])
+                if not termi:
+                    continue
+                break
+
