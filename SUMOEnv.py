@@ -258,11 +258,11 @@ class SUMOEnv(gym.Env):
                 [self.critical_step_idx[i].append(self.sample_step) for i in range(self.num_agent) if self.agents_to_update[i] == 1 and self.sample_step > 0]
 
                 self.sample_step += 1
-                self.truncated = (self.sample_step > self.max_sample_episode)
+                self.truncated = (self.sample_step > self.max_sample_step)
                 break
 
         self.episode_step += 1
-        self.terminated = (self.episode_step > self.max_step_episode)
+        self.terminated = (self.episode_step > self.max_episode_step)
 
         info = {}
         observation = {'queue': np.array([tl.retrieve_queue() for tl in self.tls]).flatten(),
@@ -303,7 +303,7 @@ class SUMOEnv(gym.Env):
                        'stage': np.array([tl.retrieve_stage() for tl in self.tls]).flatten()}
 
         return observation, info
-    
+
     def start_simulation(self):
         """
         Start the sumo simulation according to the sumo commend.
@@ -351,6 +351,9 @@ class SUMOEnv(gym.Env):
         self.tl_ids = list(self.sumo.trafficlight.getIDList())
         self.tls = [TrafficSignal(tl_id, self.pattern, yellow, self.sumo) for tl_id, yellow in
                     zip(self.tl_ids, self.yellow)]
+
+    def reset_truncated(self):
+        self.truncated = False
 
     def close(self):
         """

@@ -274,12 +274,14 @@ class MultiAgentTransformer(nn.Module):
 
         return values
 
-    def act(self, obs, last_act_dis, last_act_con):
+    def act(self, obs, last_act_dis, last_act_con, agent_to_update):
         """
         Compute stages and value function predictions for the given inputs.
+
         :param obs:
         :param last_act_dis: the last step's discrete actions, for masking the discrete action space if it time to act.
         :param last_act_con: the last step's continuous actions, for deciding whether to infer(map2real(last_act_con) < 0.1) on the current step.
+        :param agent_to_update:
         :return:
         """
         obs = check(obs).to(self.device)
@@ -291,6 +293,6 @@ class MultiAgentTransformer(nn.Module):
 
         act_dis, logp_dis, act_con, logp_con = \
             autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, last_act_dis, last_act_con,
-                               self.max_green, self.device)
+                               agent_to_update, self.device)
 
-        return act_con, act_dis, logp_con, logp_dis, values
+        return act_dis, logp_dis, act_con, logp_con, values

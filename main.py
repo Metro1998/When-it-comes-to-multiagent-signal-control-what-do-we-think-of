@@ -1,3 +1,5 @@
+from collections import deque
+
 import gymnasium as gym
 import numpy as np
 import time
@@ -14,6 +16,7 @@ if __name__ == '__main__':
     batch_size = 256
     agent_num = 20
     total_episodes = 500
+    history_length = 5
 
     """ AGENT SETUP """
     # agent_gpu = MultiAgentTransformer(obs_dim=200, action_dim=8, embd_dim=64, agent_num=20, block_num=1, head_num=8,
@@ -26,11 +29,12 @@ if __name__ == '__main__':
     """ ENVIRONMENT SETUP """
     yellow = 3
     stage_num = 8
-    env_num = 6
+    env_num = 2
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_step_round = 3600
+    max_episode_step = 3600 * 6
+    max_sample_step = 3600
     pattern = 'queue'
     st = time.time()
     env = gym.vector.AsyncVectorEnv([
@@ -42,8 +46,8 @@ if __name__ == '__main__':
                              route_file=local_route_file,
                              addition_file=local_addition_file,
                              pattern=pattern,
-                             max_step_episode=500,
-
+                             max_episode_step=max_episode_step,
+                             max_sample_step=max_sample_step,
                              ) for i in range(env_num)
 
     ])
@@ -63,6 +67,8 @@ if __name__ == '__main__':
         random_numbers = np.random.randint(low=[0, 10], high=[8, 41], size=(12, 20, 2))
         action = {'duration': random_numbers[:, :, 1], 'stage': random_numbers[:, :, 0]}
         obs, reward, t, _, info = env.step(action)
+        print("obs_queue", obs['queue'].shape)
+        print("obs_stage", obs['stage'].shape)
         print(info['critical_step_idx'])
         if True in t:
             print(t)
@@ -72,23 +78,31 @@ if __name__ == '__main__':
     for episode in range(total_episodes):
 
         # rollout phase
-        next_obs, _ = env.reset()
+        obs_history = np.zeros((max_episode_step, env_num, agent_num, np.float32))
+        next_obs, info = env.reset()
+        obs_history_ptr = 0
+        act_dis = -np.ones((env_num, agent_num), dtype=np.int64)
+        act_con = np.zeros((env_num, agent_num), dtype=np.float32)
 
         while True:
-            # Retrieve the current observation, and transfer it to GRU. Utilize the deque implementation
-            obs = batchify_obs(next_obs, device=self.device)
+            # We only retrieve the queue information, and then push it into the observation history (for GRU).
+            obs = np.reshape(next_obs['queue'], (env_num, agent_num, -1))
+            obs_history[obs_history_ptr + obs_history - 1] = obs
+            obs_rnn = obs_history[obs_history_ptr: obs_history_ptr + history_length]
 
             # Get action from the agent
-            act_con, act_dis, logp_dis, logp_con = agent.get_action(obs)
+            act_dis, logp_dis, act_con, logp_con, values = trainer.agent_cpu.act(obs_rnn, last_act_dis=act_dis, last_act_con=act_con, agent_to_update=info['agent_to_update'])
 
             # Execute the environment and log data
             next_obs, reward, termi, trunc, info = env.step()
 
-            buffer.store_trajectories(obs, rewards, act_con, act_dis, logp_con, logp_dis)
+            buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis)
 
+            obs_history_ptr += 1
             if termi or trunc:
                 buffer.finish_path(info[reward_idx])
                 if not termi:
+                    env.reset_truncated()
                     continue
                 break
 

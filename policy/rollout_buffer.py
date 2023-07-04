@@ -20,7 +20,7 @@ class PPOBuffer:
     """
 
     def __init__(self, num_steps, num_envs, num_agents, obs_dim, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros((num_steps, num_envs, num_agents * obs_dim), dtype=np.float32)
+        self.obs_buf = np.zeros((num_steps, num_envs, num_agents, obs_dim), dtype=np.float32)
         self.rew_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.val_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.adv_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
@@ -91,7 +91,7 @@ class PPOBuffer:
 
         self.path_start_idx = end_idx  # 因为我们的计算都是到end_idx(不包含)为止
 
-    def store_trajectories(self, obs, rew, act_con, act_dis, logp_con, logp_dis):
+    def store_trajectories(self, obs, rew, val, act_con, act_dis, logp_con, logp_dis):
         """
 `       Append one timestep of agent-environment interaction to the buffer.
         ### Inputs are batch of num_envs * num_agents ###
@@ -99,6 +99,7 @@ class PPOBuffer:
         assert self.ptr < self.max_size
         self.obs_buf[self.ptr] = obs
         self.rew_buf[self.ptr] = rew
+        self.val_buf[self.ptr] = val
         self.act_con_buf[self.ptr] = act_con
         self.act_dis_buf[self.ptr] = act_dis
         self.logp_con_buf[self.ptr] = logp_con
