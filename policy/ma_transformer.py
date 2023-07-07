@@ -143,16 +143,16 @@ class Encoder(nn.Module):
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
-        self.GRU = GRUs(obs_dim, embd_dim, agent_num)
+        self.GRU = GRUs(obs_dim, obs_dim, agent_num)  # we use GRU to encode the observation sequence
 
-        self.obs_encoder = nn.Sequential(nn.LayerNorm(embd_dim),
-                                         init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU())
+        self.obs_embedding = nn.Sequential(nn.LayerNorm(obs_dim),
+                                           init_(nn.Linear(obs_dim, embd_dim), activate=True), nn.GELU())
         self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
 
         # There are agent_num heads, because we approximate state value of each agent separately.
         self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(), nn.LayerNorm(embd_dim),
-                                  init_(nn.Linear(embd_dim, agent_num)))
+                                  init_(nn.Linear(embd_dim, 1)))  # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
 
     def forward(self, obs):
         """
@@ -161,9 +161,9 @@ class Encoder(nn.Module):
         :return:
         """
         obs = self.GRU(obs)  # (B, N, embd_dim)
-        obs_embeddings = self.obs_encoder(obs)
+        obs_embeddings = self.obs_embedding(obs)
         rep = self.blocks(self.ln(obs_embeddings))
-        values = self.head(rep)
+        values = self.head(rep).squeeze()
 
         return values, rep
 
@@ -178,8 +178,8 @@ class Decoder(nn.Module):
 
         # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
         # and 1 indicates raw continuous parameter.
-        self.action_encoder = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
-                                            nn.GELU())
+        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
+                                              nn.GELU())
         # self.ln = nn.LayerNorm(embd_dim)
         self.blocks_dis = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
         self.blocks_con = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
@@ -198,7 +198,7 @@ class Decoder(nn.Module):
 
     def forward(self, hybrid_action, obs_rep):
         # x = self.ln(action_embeddings)
-        action_embeddings = self.action_encoder(hybrid_action)
+        action_embeddings = self.action_embedding(hybrid_action)
 
         x = action_embeddings
         for block in self.blocks_dis:
@@ -209,14 +209,14 @@ class Decoder(nn.Module):
         for block in self.blocks_con:
             x = block(x, obs_rep)
         var_con = self.head_con(x)
-        means = self.fc_mean(var_con)  # (B, N, action_dim)
-        stds = torch.clamp(F.softmax(self.fc_std(var_con)), min=self.std_clip[0], max=self.std_clip[1])
+        means = F.tanh(self.fc_mean(var_con))  # (B, N, action_dim)
+        stds = torch.clamp(F.softmax(F.tanh(self.fc_std(var_con))), min=self.std_clip[0], max=self.std_clip[1])
         return logits, means, stds
 
 
 class MultiAgentTransformer(nn.Module):
 
-    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, std_clip, max_green, device):
+    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, std_clip, device):
         """
 
         :param obs_dim:
@@ -226,7 +226,6 @@ class MultiAgentTransformer(nn.Module):
         :param block_num:
         :param head_num:
         :param std_clip:
-        :param max_green:
         :param device:
         """
         super(MultiAgentTransformer, self).__init__()
@@ -234,7 +233,6 @@ class MultiAgentTransformer(nn.Module):
         self.action_dim = action_dim
         self.agent_num = agent_num
         self.std_clip = std_clip
-        self.max_green = max_green
         self.device = device
 
         # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
@@ -287,12 +285,14 @@ class MultiAgentTransformer(nn.Module):
         obs = check(obs).to(self.device)
         last_act_dis = check(last_act_dis).to(self.device)
         last_act_con = check(last_act_con).to(self.device)
+        agent_to_update = check(agent_to_update).to(self.device)
 
-        values, obs_rep = self.encoder(obs)
+        with torch.no_grad():
+            values, obs_rep = self.encoder(obs)
         env_num = obs.shape[0]
 
         act_dis, logp_dis, act_con, logp_con = \
             autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, last_act_dis, last_act_con,
                                agent_to_update, self.device)
 
-        return act_dis, logp_dis, act_con, logp_con, values
+        return act_dis.numpy(), logp_dis.numpy(), act_con.numpy(), logp_con.numpy(), values.numpy()

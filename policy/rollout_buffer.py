@@ -19,8 +19,8 @@ class PPOBuffer:
     for calculating the advantages of obs-action pairs.
     """
 
-    def __init__(self, num_steps, num_envs, num_agents, obs_dim, gamma=0.99, lam=0.95):
-        self.obs_buf = np.zeros((num_steps, num_envs, num_agents, obs_dim), dtype=np.float32)
+    def __init__(self, num_steps, num_envs, num_agents, obs_dim, len_his, gamma=0.99, lam=0.95):
+        self.obs_buf = np.zeros((num_steps, num_envs, num_agents, len_his, obs_dim), dtype=np.float32)
         self.rew_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.val_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.adv_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)

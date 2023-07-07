@@ -50,55 +50,76 @@ def map2real(raw_con, max_green):
     :param max_green:
     :return:
     """
-    return (raw_con + 1) * max_green / 2
+    return ((raw_con + 1) * max_green / 2).astype(np.int32)
 
 
-def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, agent_to_update, device):
+def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, agent_to_update,
+                       device):
     hybrid_action = torch.zeros((batch_size, agent_num, action_dim + 2), dtype=torch.float32, device=device)
     hybrid_action[:, 0, 0] = 1
 
     for i in range(agent_num):
         with torch.no_grad():
             logits, means, stds = decoder(hybrid_action, obs_rep)
-            logits = logits[:, i]
-            means = means[:, i]
-            stds = stds[:, i]
+            logit = logits[:, i]
+            mean = means[:, i]
+            std = stds[:, i]
+            act_dis_ori = action_dis[:, i]
+            act_con_ori = action_con[:, i]
+            agent_to_update_ = agent_to_update[:, i].bool()
 
-            if agent_to_update[:, i]:
-                if action_dis[:, i] >= 0:
-                    logits[action_dis[:, i]] = float('-inf')
-                dist_dis = Categorical(logits=logits)
-                act_dis = dist_dis.sample()
+            mask = F.one_hot(act_dis_ori, num_classes=action_dim).bool()
+            logit_masked = logit.masked_fill(mask, float('-inf'))
+            logit_ = torch.where(agent_to_update_.view(-1, 1), logit_masked, logit)
+            dist_dis = Categorical(logits=logit_)  # the discrete distribution of all the agents
+            act_dis_sam = dist_dis.sample()
 
-                dist_con = Normal(means[act_dis], stds[act_dis])
-                act_con = dist_con.sample()
+            act_dis_ = torch.where(agent_to_update_, act_dis_sam, act_dis_ori)
 
-            else:
-                dist_dis = Categorical(logits=logits)
-                act_dis = action_dis[:, i]
+            mean_ = torch.where(agent_to_update_, torch.gather(mean, 1, act_dis_sam.unsqueeze(-1)).squeeze(), torch.gather(mean, 1, act_dis_ori.unsqueeze(-1)).squeeze())
+            std_ = torch.where(agent_to_update_, torch.gather(std, 1, act_dis_sam.unsqueeze(-1)).squeeze(), torch.gather(std, 1, act_dis_ori.unsqueeze(-1)).squeeze())
+            dist_con = Normal(mean_, std_)
+            act_con_ = torch.where(agent_to_update_, dist_con.sample(), act_con_ori)
 
-                dist_con = Normal(means[action_dis], stds[action_dis])
-                act_con = action_con[:, i]
+            print(act_con_)
 
-            act_logp_dis = dist_dis.log_prob(act_dis)
-            act_logp_con = dist_con.log_prob(act_con)
+            act_logp_dis = dist_dis.log_prob(act_dis_)
+            act_logp_con = dist_con.log_prob(act_con_)
+
+            #
+            # if agent_to_update[:, i]:
+            #     dist_dis = Categorical(logits=logit)
+            #     act_dis = dist_dis.sample()
+            #
+            #     dist_con = Normal(mean[act_dis], std[act_dis])
+            #     act_con = dist_con.sample()
+            #
+            # else:
+            #     dist_dis = Categorical(logits=logit)
+            #     act_dis = action_dis[:, i]
+            #
+            #     dist_con = Normal(mean[action_dis], std[action_dis])
+            #     act_con = action_con[:, i]
+            #
+            # act_logp_dis = dist_dis.log_prob(act_dis)
+            # act_logp_con = dist_con.log_prob(act_con)
 
             if i + 1 < agent_num:
-                hybrid_action[:, i + 1, 1:-1].copy_(F.one_hot(act_dis, num_classes=action_dim).float())
-                hybrid_action[:, i + 1, -1] = act_con
+                hybrid_action[:, i + 1, 1:-1].copy_(F.one_hot(act_dis_, num_classes=action_dim).float())
+                hybrid_action[:, i + 1, -1] = act_con_
 
         if i == 0:
-            output_act_dis = act_dis
-            output_act_con = act_con
-            output_logp_dis = act_logp_dis
-            output_logp_con = act_logp_con
+            output_act_dis = act_dis_.unsqueeze(0)
+            output_act_con = act_con_.unsqueeze(0)
+            output_logp_dis = act_logp_dis.unsqueeze(0)
+            output_logp_con = act_logp_con.unsqueeze(0)
         else:
-            output_act_dis = torch.cat((output_act_dis, act_dis), dim=1)
-            output_act_con = torch.cat((output_act_con, act_con), dim=1)
-            output_logp_dis = torch.cat((output_logp_dis, act_logp_dis), dim=1)
-            output_logp_con = torch.cat((output_logp_con, act_logp_con), dim=1)
+            output_act_dis = torch.cat((output_act_dis, act_dis_.unsqueeze(0)), dim=0)
+            output_act_con = torch.cat((output_act_con, act_con_.unsqueeze(0)), dim=0)
+            output_logp_dis = torch.cat((output_logp_dis, act_logp_dis.unsqueeze(0)), dim=0)
+            output_logp_con = torch.cat((output_logp_con, act_logp_con.unsqueeze(0)), dim=0)
 
-    return output_act_dis, output_logp_dis, output_act_con, output_logp_con
+    return torch.transpose(output_act_dis, 0, 1), torch.transpose(output_logp_dis, 0, 1), torch.transpose(output_act_con, 0, 1), torch.transpose(output_logp_con, 0, 1)
 
 
 def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, decision_flag, device):
@@ -122,7 +143,6 @@ def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis
     entropy_con = dist_con.entropy()
 
     return act_logp_dis, entropy_dis, act_logp_con, entropy_con
-
 
 # def batchify_obs(obs, device):
 #     """
