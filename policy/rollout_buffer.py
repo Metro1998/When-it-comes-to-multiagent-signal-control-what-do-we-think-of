@@ -33,7 +33,7 @@ class PPOBuffer:
         self.ptr, self.path_start_idx, self.max_size = 0, 0, num_steps
         self.end_idx = np.array([0])
 
-    def finish_path(self, critical_step_idx, last_val=0):
+    def finish_path(self, critical_step_idx, last_val):
         """
         Call this at the end of a trajectory.
         首先我们会等一个truncated 或者 terminated 这个表示我们已经采样到了足够数量的样本/该episode已经结束，但是我们还会让SUMOEnv继续运行直到所有
@@ -42,23 +42,16 @@ class PPOBuffer:
         所以我们需要将reward往后cumsum， 至于end_idx我们会在仿真的时候进行记录，处理完reward之后我们实际上已经拿到了所有（可行的）state 所对应的reward
         紧接着我会在make a decision 的step上 进行gae的计算.
         在计算每个state所对应的advantage之后，我们会计算lambda return using G_lambda =  GAE + V(s)
+        :param last_val:
         :param critical_step_idx: if it is time to decide and episode_simple > 0, then append episode_sample to critical_step_idx.
         :return:
         """
 
         path_slice = slice(self.path_start_idx, self.ptr)
-
-        end_idx = sys.maxsize  # The end_idx of the available fixed trajectory segment.
-        reward = self.rew_buf[path_slice].transpose(1, 2, 0)  # [num_envs, num_agents, num_steps] [s_0, ... , s_n-1]
-        value = np.append(self.val_buf[path_slice].transpose(1, 2, 0), last_val)  # [num_envs, num_agents, num_steps + 1]  [s_0, ... , s_n]
-        reward_ = np.zeros_like(reward)  # For the rebuilt reward.
-        cum_end_idx = np.zeros_like(reward)
-
-        # reward[i][j]              np.array([2, 9, 1, -5, 13, 12, 7, 3])
-        # critical_step_idx[i][j]                      [3,              8]
-        # cum_end_idx[i][j]         np.array([3, 3, 3, 8, 8, 8, 8, 8])
-        # idx                                [0, 1, 2, 3, 4, 5, 6, 7]
-        # reward_[i][j]             np.array([12, 10, 1, 30, 25, 22, 10, 3])
+        end_idx = sys.maxsize
+        reward = self.rew_buf[path_slice].transpose(1, 2, 0)  # [num_envs, num_agents, num_steps(s_0, ... , s_n-1)]
+        reward_ = np.zeros_like(reward)  # reorganized reward.
+        cum_end_idx = np.zeros_like(reward, dtype=np.int64)  # The cum_end_idx of the available fixed trajectory segment.
 
         num_envs = len(critical_step_idx)
         num_agents = len(critical_step_idx[0])
@@ -69,27 +62,36 @@ class PPOBuffer:
                 end_idx = min(end_idx, critical_step_idx[i][j][-1])  # 最短那段轨迹，其critical_step的idx，注意是idx 也可以看成可用轨迹的长度 不包括最后一个critical_step
                 arr = np.array(critical_step_idx[i][j])
                 arr_diff = np.diff(np.insert(arr, 0, 0))
-                cum_end_idx[i][j] = np.repeat(arr, arr_diff)
+                print(arr_diff)
+                tmp = np.repeat(arr, arr_diff)
+                cum_end_idx[i][j][:len(tmp)] = tmp
 
-        # Transverse the time step.
-        for i in range(end_idx):
-            reward_ = np.cumsum(reward[:, :, i: cum_end_idx[:, :, i]], axis=2)
-        # Finally, we will utilize the left part to calculate the advantage.
+        for i in range(num_envs):
+            for j in range(num_agents):
+                for k in range(end_idx):
+                    reward_[i][j][k] = np.sum(reward[i][j][k: cum_end_idx[i][j][k]])
         reward_ = reward_[:, :, :end_idx]
+        value_ = self.val_buf[path_slice].transpose(1, 2, 0)
 
         for i in range(num_envs):
             for j in range(num_agents):
                 arr = np.array(critical_step_idx[i][j])
-                mask_rew = (arr < end_idx)
-                mask_val = (arr <= end_idx)
                 for k in range(end_idx):
-                    rew_tra = np.insert(reward_[i][j][mask_rew & (arr > k)], 0, reward_[i][j][k])
-                    val_tra = np.insert(value[i][j][mask_val & (arr > k)], 0, value[i][j][k])
+                    rew_idx = arr[(arr > k) & (arr < end_idx)]
+                    val_idx = arr[arr > k][:len(rew_idx) + 1]
+                    rew_tra = np.insert(reward_[i][j][rew_idx], 0, reward_[i][j][k])
+                    val_tra = np.insert(value_[i][j][val_idx], 0, value_[i][j][k])
                     delta = rew_tra + self.gamma * val_tra[1:] - val_tra[:-1]
-                    self.adv_buf[i][j][self.path_start_idx + k] = discount_cumsum(delta, self.gamma * self.lam)[0]
-                    self.ret_buf[i][j][self.path_start_idx + k] = self.adv_buf[i][j][self.path_start_idx + k] + value[i][j][self.path_start_idx + k]
+                    self.adv_buf[self.path_start_idx + k][i][j] = discount_cumsum(delta, self.gamma * self.lam)[0]
+                    self.ret_buf[self.path_start_idx + k][i][j] = self.adv_buf[self.path_start_idx + k][i][j] + value_[i][j][self.path_start_idx + k]
 
-        self.path_start_idx = end_idx  # 因为我们的计算都是到end_idx(不包含)为止
+        # deltas = reward_.mean(1) + self.gamma * value_[:, :, 1:].mean(1) - value_[:, :, :-1].mean(1)  # (num_envs, end_idx)
+        #
+        # self.adv_buf[self.path_start_idx, end_idx] = discount_cumsum(deltas, self.gamma * self.lam).transpose(1, 0)  # (end_idx, num_envs)
+        # self.ret_buf[self.path_start_idx, end_idx] = discount_cumsum(reward_, self.gamma).transpose(1, 0)  # (end_idx, num_envs)
+
+        print('SUCCESS')
+        self.path_start_idx = end_idx
 
     def store_trajectories(self, obs, rew, val, act_con, act_dis, logp_con, logp_dis):
         """
@@ -120,7 +122,9 @@ class PPOBuffer:
         logp_con = self.logp_con_buf[:self.ptr]
         logp_dis = self.logp_dis_buf[:self.ptr]
 
-        return obs, rew, act_con, act_dis, logp_con, logp_dis, self.end_idx
+        self.ptr = 0
+
+        return obs, rew, act_con, act_dis, logp_con, logp_dis
 
     def clear(self):
         self.ptr = 0

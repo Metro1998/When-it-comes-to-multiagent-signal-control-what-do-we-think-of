@@ -150,6 +150,9 @@ class TrafficSignal:
     def retrieve_stage(self):
 
         return self.stage_old
+    
+    def retrieve_left_time(self):
+        return len(self.schedule)
 
 
 class SUMOEnv(gym.Env):
@@ -200,7 +203,7 @@ class SUMOEnv(gym.Env):
         self.tls = None
         self.rewards = None
         self.terminated = False
-        self.truncated = False
+        self.trunc = False
         self.critical_step_idx = None
         self.agents_to_update = np.ones(self.num_agent, dtype=np.int32)
 
@@ -235,10 +238,13 @@ class SUMOEnv(gym.Env):
         tls_executed = [tl for tl, a in zip(self.tls, self.agents_to_update) if a == 1]
         for a, tl in zip(action_executed, tls_executed):
             tl.set_stage_duration(a[0], a[1])
-
+        
+        if self.trunc:
+            self.trunc = False
+            self.sample_step = 0
+        
         while True:
             self.sumo.simulationStep()
-
 
             # Automatically execute the transition from the yellow stage to green stage, and simultaneously set the end indicator -1.
             # Moreover, check() will return the front of the schedule.
@@ -246,11 +252,15 @@ class SUMOEnv(gym.Env):
 
             # Pop the most left element of the schedule.
             [tl.pop() for tl in self.tls]
-
+            
+            self.episode_step += 1
+            self.terminated = (self.episode_step > self.max_episode_step)
+            
             # ids are agents who should act right now.
             if -1 in checks or self.terminated:
                 self.agents_to_update = -np.array(checks, dtype=np.int64)
-
+                
+                left_time = np.array([tl.retrieve_left_time() for tl in self.tls])
                 [tl.get_subscription_result() for tl in self.tls]
                 reward = np.array([tl.retrieve_reward() for tl in self.tls])
                 # critical_step_idx (list) is the index for recomputing reward.
@@ -258,16 +268,12 @@ class SUMOEnv(gym.Env):
                 [self.critical_step_idx[i].append(self.sample_step) for i in range(self.num_agent) if self.agents_to_update[i] == 1 and self.sample_step > 0]
 
                 self.sample_step += 1
-                self.truncated = (self.sample_step > self.max_sample_step)
+                self.trunc = (self.sample_step > self.max_sample_step)
                 break
 
-        self.episode_step += 1
-        self.terminated = (self.episode_step > self.max_episode_step)
-
+        observation = { 'queue': np.array([tl.retrieve_queue() for tl in self.tls]).flatten(),
+                        'stage': np.array([tl.retrieve_stage() for tl in self.tls]).flatten()}
         info = {}
-        observation = {'queue': np.array([tl.retrieve_queue() for tl in self.tls]).flatten(),
-                       'stage': np.array([tl.retrieve_stage() for tl in self.tls]).flatten()}
-
         # For performance evaluation
         info['queue'] = np.array([sum(tl.retrieve_info()) for tl in self.tls])
 
@@ -276,11 +282,14 @@ class SUMOEnv(gym.Env):
 
         # For policy update
         info['agents_to_update'] = self.agents_to_update
+        
+        # For left time
+        info['left_time'] = left_time
+        
+        # For agents to update
+        info['agents_to_update'] = self.agents_to_update        
 
-        # if self.terminated: # TODO:
-        #     self.reset()
-
-        return observation, reward, self.terminated, self.truncated, info
+        return observation, reward, self.terminated, self.trunc, info
     
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super(SUMOEnv, self).reset(seed=seed)
@@ -292,17 +301,15 @@ class SUMOEnv(gym.Env):
         self.episode_step = 0
         self.sample_step = 0
         self.terminated = False
-        self.agents_to_update = np.ones(self.num_agent, dtype=np.int32)
         self.critical_step_idx = [[] for _ in range(self.num_agent)]
-
+        self.agents_to_update = np.ones(self.num_agent, dtype=np.int32)
         self.start_simulation()
 
         [tl.get_subscription_result() for tl in self.tls]
-        info = {'agents_to_update': self.agents_to_update}
         observation = {'queue': np.array([tl.retrieve_queue() for tl in self.tls]).flatten(),
                        'stage': np.array([tl.retrieve_stage() for tl in self.tls]).flatten()}
 
-        return observation, info
+        return observation, {}
 
     def start_simulation(self):
         """
@@ -317,7 +324,8 @@ class SUMOEnv(gym.Env):
             self.route_file,
             "-a",
             self.addition_file,
-
+            "--no-warnings",
+            str(True),
             # default settings
             "--max-depart-delay",
             str(-1),
@@ -353,7 +361,7 @@ class SUMOEnv(gym.Env):
                     zip(self.tl_ids, self.yellow)]
 
     def reset_truncated(self):
-        self.truncated = False
+        self.trunc = False
 
     def close(self):
         """

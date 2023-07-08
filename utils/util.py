@@ -5,6 +5,16 @@ from torch.distributions import Categorical, Normal
 from torch.nn import functional as F
 
 
+# def convert_array(array):
+#     """
+#     Convert the numpy array to torch tensor.
+#     :param array:
+#     :return:
+#     """
+#     for i in range(len(array)):
+#         array[i] = torch.from_numpy(array[i])
+
+
 def discount_cumsum(x, discount):
     """
     magic from rllab for computing discounted cumulative sums of vectors.
@@ -79,9 +89,7 @@ def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, acti
             mean_ = torch.where(agent_to_update_, torch.gather(mean, 1, act_dis_sam.unsqueeze(-1)).squeeze(), torch.gather(mean, 1, act_dis_ori.unsqueeze(-1)).squeeze())
             std_ = torch.where(agent_to_update_, torch.gather(std, 1, act_dis_sam.unsqueeze(-1)).squeeze(), torch.gather(std, 1, act_dis_ori.unsqueeze(-1)).squeeze())
             dist_con = Normal(mean_, std_)
-            act_con_ = torch.where(agent_to_update_, dist_con.sample(), act_con_ori)
-
-            print(act_con_)
+            act_con_ = torch.where(agent_to_update_, torch.tanh(dist_con.sample()), act_con_ori.float())
 
             act_logp_dis = dist_dis.log_prob(act_dis_)
             act_logp_con = dist_con.log_prob(act_con_)

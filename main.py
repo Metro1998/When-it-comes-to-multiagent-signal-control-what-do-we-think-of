@@ -18,7 +18,7 @@ if __name__ == '__main__':
     parser.add_argument('--agent_num', type=int, default=20, help='Number of agents.')  # 代理数量
     parser.add_argument('--block_num', type=int, default=1, help='Number of transformer blocks.')  # Transformer块数量
     parser.add_argument('--head_num', type=int, default=4, help='Number of attention heads.')  # 注意力头数量
-    parser.add_argument('--std_clip', type=float, default=[0.1, 0.8], help='Standard deviation clip value.')  # 标准差剪裁值
+    parser.add_argument('--std_clip', type=float, default=[0.1, 0.4], help='Standard deviation clip value.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--clip_ratio', type=float, default=0.2, help='Clip ratio.')
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size.')
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     # 算法参数
     parser.add_argument('--total_episodes', type=int, default=500, help='Total number of episodes.')
-    parser.add_argument('--history_length', type=int, default=5, help='Length of history for the observation.')
+    parser.add_argument('--history_len', type=int, default=5, help='Length of history for the observation.')
 
     # 环境设置
     parser.add_argument('--yellow', type=int, default=3, help='Duration of yellow phase in seconds.')
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     batch_size = 256
     agent_num = 20
     total_episodes = 500
-    history_length = 5
+    history_len = 5
     obs_dim = 8
 
     """ AGENT SETUP """
@@ -74,8 +74,8 @@ if __name__ == '__main__':
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 3600 * 6
-    max_sample_step = 3600
+    max_episode_step = 10000
+    max_sample_step = 100
     pattern = 'queue'
     st = time.time()
     env = gym.vector.AsyncVectorEnv([
@@ -92,61 +92,52 @@ if __name__ == '__main__':
                              ) for i in range(env_num)
 
     ])
-    buffer = PPOBuffer(100000, env_num, agent_num, obs_dim, history_length, gamma=0.99, lam=0.95)
+    buffer = PPOBuffer(100000, env_num, agent_num, obs_dim, history_len, gamma=0.99, lam=0.95)
 
-    # env = gym.make('sumo-rl-v1',
-    #                yellow=[yellow] * agent_num,
-    #                num_agent=agent_num,
-    #                use_gui=False,
-    #                net_file=local_net_file,
-    #                route_file=local_route_file,
-    #                addition_file=local_addition_file,
-    #                pattern=pattern
-    #                )
-    # state, _ = env.reset()  # (✔)
-    #
-    # while True:
-    #     random_numbers = np.random.randint(low=[0, 10], high=[8, 41], size=(12, 20, 2))
-    #     action = {'duration': random_numbers[:, :, 1], 'stage': random_numbers[:, :, 0]}
-    #     obs, reward, t, _, info = env.step(action)
-    #     print("obs_queue", obs['queue'].shape)
-    #     print("obs_stage", obs['stage'].shape)
-    #     print(info['critical_step_idx'])
-    #     if True in t:
-    #         print(t)
-    #         print('----------------------------------------------------------------------------------------')
-    #
     # """ TRAINING LOGIC """
     for episode in range(total_episodes):
 
         # rollout phase
-        obs_history = np.zeros((max_episode_step, env_num, agent_num, obs_dim), dtype=np.float32)
+        obs_history = np.zeros((max_episode_step * 2, env_num, agent_num, obs_dim), dtype=np.float32)
         next_obs, info = env.reset()
-        obs_history_ptr = 0
-        act_dis = np.zeros((env_num, agent_num), dtype=np.int64)
-        act_con = np.zeros((env_num, agent_num), dtype=np.float32)
+
+        last_act_dis = np.zeros((env_num, agent_num), dtype=np.int64)
+        last_act_con = np.zeros((env_num, agent_num), dtype=np.float32)
+        agent_to_update = np.ones((env_num, agent_num), dtype=np.int64)
+        history_ptr = 0
 
         while True:
             # We only retrieve the queue information, and then push it into the observation history (for GRU).
             obs = np.reshape(next_obs['queue'], (env_num, agent_num, -1))
-            obs_history[obs_history_ptr + history_length - 1] = obs
-            obs_rnn = obs_history[obs_history_ptr: obs_history_ptr + history_length].transpose((1, 2, 0, 3))
-            agent_to_update = next_obs['agents_to_update']
+            obs_history[history_ptr + history_len - 1] = obs
+            obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
 
             # Get action from the agent
-            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, last_act_dis=act_dis, last_act_con=act_con, agent_to_update=agent_to_update)
-            action = {'duration': map2real(act_con, 40), 'stage': act_dis}
+            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, last_act_dis=last_act_dis, last_act_con=remap(last_act_con, 40), agent_to_update=agent_to_update)
 
-            # Execute the environment and log data
-            next_obs, reward, termi, trunc, info = env.step(action)
+            # Execute the environment and log dsata
+            action = {'duration': map2real(act_con, 40), 'stage': act_dis}
+            next_obs, reward, termi, _, info = env.step(action)
+
             buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis)
 
-            obs_history_ptr += 1
-            print(termi, trunc)
-            if termi.all() or trunc.all():
-                buffer.finish_path(info[reward_idx])
-                if not termi:
-                    env.reset_truncated()
-                    continue
-                break
+            last_act_dis = act_dis
+            last_act_con = np.array([info['left_time'][i] for i in range(env_num)])
+            agent_to_update = np.array([info['agents_to_update'][i] for i in range(env_num)])
+            trunc = np.array([info['trunc'][i] for i in range(env_num)])
+            history_ptr += 1
+
+            if termi.any() or trunc.any():
+                # Ready to finish rollout, get the value of the last observation first.
+                obs = np.reshape(next_obs['queue'], (env_num, agent_num, -1))
+                obs_history[history_ptr + history_len - 1] = obs
+                obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
+                last_val = trainer.policy_cpu.get_values(obs_rnn)
+                critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
+                buffer.finish_path(critical_step_idx=critical_step_idx, last_val=last_val)
+
+        # update phase
+        # TODO 自动对齐 以及 类型转换 以及 reset buffer 以及 update 以及 util 简化计算
+        obs, rew, act_con, act_dis, logp_con, logp_dis = buffer.get()
+
 

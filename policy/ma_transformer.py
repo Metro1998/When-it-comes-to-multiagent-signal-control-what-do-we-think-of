@@ -209,8 +209,8 @@ class Decoder(nn.Module):
         for block in self.blocks_con:
             x = block(x, obs_rep)
         var_con = self.head_con(x)
-        means = F.tanh(self.fc_mean(var_con))  # (B, N, action_dim)
-        stds = torch.clamp(F.softmax(F.tanh(self.fc_std(var_con))), min=self.std_clip[0], max=self.std_clip[1])
+        means = self.fc_mean(var_con)  # (B, N, action_dim)
+        stds = torch.clamp(F.softplus(self.fc_std(var_con)), min=self.std_clip[0], max=self.std_clip[1])
         return logits, means, stds
 
 
@@ -268,7 +268,8 @@ class MultiAgentTransformer(nn.Module):
         :return: (torch.Tensor) value function predictions
         """
         obs = check(obs).to(self.device)
-        values, _ = self.encoder(obs)
+        with torch.no_grad():
+            values, _ = self.encoder(obs)
 
         return values
 
