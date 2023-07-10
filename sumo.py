@@ -35,7 +35,7 @@ class TrafficSignal:
 
     It is responsible for retrieving information and changing the traffic phase using the Traci API.
 
-    IMPORTANT: It assumes that the traffic phases defined in the .net file are of the form:
+    IMPORTANT: It assumes that the traffic phases defined in the .net_file file are of the form:
         [green_phase, yellow_phase, green_phase, yellow_phase, ...]
     Currently it is not supporting all-red phases (but should be easy to implement it).
 
@@ -369,7 +369,7 @@ class SumoEnvironment(gym.Env):
     See https://gymnasium.farama.org/ for details on gymnasium.
 
     Args:
-        net_file (str): SUMO .net.xml file
+        net_file (str): SUMO .net_file.xml file
         route_file (str): SUMO .rou.xml file
         out_csv_name (Optional[str]): name of the .csv output with simulation results. If None, no output is generated
         use_gui (bool): Whether to run SUMO simulation with the SUMO GUI
@@ -645,7 +645,7 @@ class SumoEnvironment(gym.Env):
         # therefore when self.sim_step >= self.sim_max_time, the game is terminated.
         terminated = self._compute_dones()
 
-        # The truncated indicator is to indicate whether the agent has stepped for enough steps in the rounds of games,
+        # The truncate indicator is to indicate whether the agent has stepped for enough steps in the rounds of games,
         # it will be always False in the SumoEnvironment class, but outside it will be determined through
         # if self.steps >= self.max_steps (M).
         truncated = False

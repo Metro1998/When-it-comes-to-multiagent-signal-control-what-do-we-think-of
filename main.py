@@ -17,7 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--embd_dim', type=int, default=64, help='Embedding dimension.')  # 嵌入维度
     parser.add_argument('--agent_num', type=int, default=20, help='Number of agents.')  # 代理数量
     parser.add_argument('--block_num', type=int, default=1, help='Number of transformer blocks.')  # Transformer块数量
-    parser.add_argument('--head_num', type=int, default=4, help='Number of attention heads.')  # 注意力头数量
+    parser.add_argument('--head_num', type=int, default=8, help='Number of attention heads.')  # 注意力头数量
     parser.add_argument('--std_clip', type=float, default=[0.1, 0.4], help='Standard deviation clip value.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--clip_ratio', type=float, default=0.2, help='Clip ratio.')
@@ -92,7 +92,6 @@ if __name__ == '__main__':
                              ) for i in range(env_num)
 
     ])
-    buffer = PPOBuffer(100000, env_num, agent_num, obs_dim, history_len, gamma=0.99, lam=0.95)
 
     # """ TRAINING LOGIC """
     for episode in range(total_episodes):
@@ -101,9 +100,11 @@ if __name__ == '__main__':
         obs_history = np.zeros((max_episode_step * 2, env_num, agent_num, obs_dim), dtype=np.float32)
         next_obs, info = env.reset()
 
-        last_act_dis = np.zeros((env_num, agent_num), dtype=np.int64)
-        last_act_con = np.zeros((env_num, agent_num), dtype=np.float32)
-        agent_to_update = np.ones((env_num, agent_num), dtype=np.int64)
+        # last_act_dis = np.zeros((env_num, agent_num), dtype=np.int64)
+        # last_act_con = np.zeros((env_num, agent_num), dtype=np.float32)
+        # agent_to_update = np.ones((env_num, agent_num), dtype=np.int64)
+        finish_path_flag = False
+        act_dis = None
         history_ptr = 0
 
         while True:
@@ -112,29 +113,23 @@ if __name__ == '__main__':
             obs_history[history_ptr + history_len - 1] = obs
             obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
 
-            # Get action from the agent
-            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, last_act_dis=last_act_dis, last_act_con=remap(last_act_con, 40), agent_to_update=agent_to_update)
-
-            # Execute the environment and log dsata
-            action = {'duration': map2real(act_con, 40), 'stage': act_dis}
-            next_obs, reward, termi, _, info = env.step(action)
-
-            buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis)
-
-            last_act_dis = act_dis
+            last_act_dis = np.zeros((env_num, agent_num), dtype=np.int64) if act_dis is None else act_dis
             last_act_con = np.array([info['left_time'][i] for i in range(env_num)])
             agent_to_update = np.array([info['agents_to_update'][i] for i in range(env_num)])
-            trunc = np.array([info['trunc'][i] for i in range(env_num)])
+
             history_ptr += 1
 
+            # Get action from the agent
+            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, last_act_dis=last_act_dis, last_act_con=remap(last_act_con, 40), agent_to_update=agent_to_update)
+            # Execute the environment and log data
+            action = {'duration': map2real(act_con, 40), 'stage': act_dis}
+            next_obs, reward, termi, _, info = env.step(action)
+            trainer.buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis, last_act_con, last_act_dis)
+
+            trunc = np.array([info['trunc'][i] for i in range(env_num)])
             if termi.any() or trunc.any():
-                # Ready to finish rollout, get the value of the last observation first.
-                obs = np.reshape(next_obs['queue'], (env_num, agent_num, -1))
-                obs_history[history_ptr + history_len - 1] = obs
-                obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
-                last_val = trainer.policy_cpu.get_values(obs_rnn)
                 critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
-                buffer.finish_path(critical_step_idx=critical_step_idx, last_val=last_val)
+                trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
 
         # update phase
         # TODO 自动对齐 以及 类型转换 以及 reset buffer 以及 update 以及 util 简化计算

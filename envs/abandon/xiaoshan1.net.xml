@@ -4,11 +4,11 @@
 <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
-        <sumo-net-file value="C:\Users\Metro\Desktop\研究生\研二下\enc\xiaoshan1.net.xml"/>
+        <sumo-net_file-file value="C:\Users\Metro\Desktop\研究生\研二下\enc\xiaoshan1.net_file.xml"/>
     </input>
 
     <output>
-        <output-file value="C:\Users\Metro\Desktop\研究生\研二下\enc\xiaoshan1.net.xml"/>
+        <output-file value="C:\Users\Metro\Desktop\研究生\研二下\enc\xiaoshan1.net_file.xml"/>
     </output>
 
     <processing>

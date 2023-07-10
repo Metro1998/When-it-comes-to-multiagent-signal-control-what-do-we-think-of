@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2023-05-03 22:58:57 by Eclipse SUMO netedit Version 1.16.0
+-->
+
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <!-- Vehicles, persons and containers (sorted by depart) -->
+    <flow id="f_0" begin="0.00" from="154646651#0" to="-519323439#0" end="3600.00" vehsPerHour="150.00"/>
+    <flow id="f_1" begin="0.00" from="154646651#0" to="1015040609#9" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_10" begin="0.00" from="827278173#0" to="-113467539#1" via="-641126492#4 -965584936#1" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_11" begin="0.00" from="-641126492#6" to="154646651#10" via="-641126492#4 965584936#2 1015040609#3 353612854#2 -231177199#3" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_12" begin="0.00" from="-641126492#6" to="E6" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_13" begin="0.00" from="86096922#0" to="-231177199#0" end="3600.00" vehsPerHour="200.00"/>
+    <flow id="f_14" begin="0.00" from="505097816#1" to="353612862#10" end="3600.00" vehsPerHour="150.00"/>
+    <flow id="f_15" begin="0.00" from="505097816#1" to="1015040609#9" end="3600.00" vehsPerHour="95.00"/>
+    <flow id="f_16" begin="0.00" from="505097816#1" to="E8" end="3600.00" vehsPerHour="85.00"/>
+    <flow id="f_17" begin="0.00" from="505097816#1" to="E6" end="3600.00" vehsPerHour="75.00"/>
+    <flow id="f_18" begin="0.00" from="505097816#1" to="-519323439#0" end="3600.00" vehsPerHour="95.00"/>
+    <flow id="f_19" begin="0.00" from="353612863#1" to="353612863#1" end="3600.00" vehsPerHour="85.00"/>
+    <flow id="f_2" begin="0.00" from="154646651#0" to="-113467539#1" end="3600.00" vehsPerHour="70.00"/>
+    <flow id="f_20" begin="0.00" from="86096922#0" to="532529595#8" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_21" begin="0.00" from="505097816#1" to="1015040609#9" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_22" begin="0.00" from="113467539#0" to="-113467509#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_23" begin="0.00" from="113467539#0" to="154489976#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_24" begin="0.00" from="113467539#0" to="E8" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_25" begin="0.00" from="113467539#0" to="154646651#10" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_26" begin="0.00" from="113467539#0" to="1069574886#3" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_27" begin="0.00" from="113467539#0" to="E8" via="113467539#3 -231177199#5 833493239#1" end="3600.00" vehsPerHour="75.00"/>
+    <flow id="f_28" begin="0.00" from="113467539#0" to="E6" via="113467539#3 154261209#8 1015040650#4" end="3600.00" vehsPerHour="150.00"/>
+    <flow id="f_29" begin="0.00" from="113467509#1" to="1015040609#9" end="3600.00" vehsPerHour="150.00"/>
+    <flow id="f_3" begin="0.00" from="154646651#0" to="E11" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_30" begin="0.00" from="113467509#1" to="532529595#8" via="641126492#2 154261209#8" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_31" begin="0.00" from="113467509#1" to="154646651#10" via="231177199#2 834985793#1" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_32" begin="0.00" from="113467509#1" to="641126492#6" via="154261209#6" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_33" begin="0.00" from="E10" to="E8" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_34" begin="0.00" from="E10" to="641126492#6" via="580853946#5 113467539#3" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_35" begin="0.00" from="E10" to="1015040609#9" end="3600.00" vehsPerHour="80.00"/>
+    <flow id="f_36" begin="0.00" from="E10" to="1069574886#3" via="154261209#6 532529595#5" end="3600.00" vehsPerHour="80.00"/>
+    <flow id="f_37" begin="0.00" from="580853946#0" to="154489976#1" end="3600.00" vehsPerHour="105.00"/>
+    <flow id="f_38" begin="0.00" from="580853946#0" to="154646651#10" end="3600.00" vehsPerHour="160.00"/>
+    <flow id="f_39" begin="0.00" from="580853946#0" to="E8" end="3600.00" vehsPerHour="108.00"/>
+    <flow id="f_4" begin="0.00" from="154646651#0" to="154646651#10" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_40" begin="0.00" from="580853946#0" to="1069574886#3" via="641126492#2 965584938#2 532529595#5" end="3600.00" vehsPerHour="80.00"/>
+    <flow id="f_41" begin="0.00" from="154489976#0" to="-113467509#1" via="580853946#2" end="3600.00" vehsPerHour="135.00"/>
+    <flow id="f_42" begin="0.00" from="154489976#0" to="113467440#4" via="154261209#3 641126492#3" end="3600.00" vehsPerHour="105.00"/>
+    <flow id="f_43" begin="0.00" from="154261208" to="-113467509#1" end="3600.00" vehsPerHour="240.00"/>
+    <flow id="f_44" begin="0.00" from="154261208" to="E6" via="231177199#4" end="3600.00" vehsPerHour="180.00"/>
+    <flow id="f_45" begin="0.00" from="154261208" to="641126492#6" via="154261209#3 641126492#2" end="3600.00" vehsPerHour="240.00"/>
+    <flow id="f_46" begin="0.00" from="231177199#0" to="-113467509#1" via="641126492#2" end="3600.00" vehsPerHour="240.00"/>
+    <flow id="f_47" begin="0.00" from="231177199#0" to="E8" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_48" begin="0.00" from="231177199#0" to="-113467539#1" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_49" begin="0.00" from="231177199#0" to="1069574886#3" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_5" begin="0.00" from="519323439#0" to="532529595#8" end="3600.00" vehsPerHour="160.00"/>
+    <flow id="f_50" begin="0.00" from="231177199#0" to="231177199#6" via="641126492#2" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_51" begin="0.00" from="607102867" to="E8" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_52" begin="0.00" from="607102867" to="-113467539#1" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_53" begin="0.00" from="607102867" to="641126492#6" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_54" begin="0.00" from="834989740#0" to="154489976#1" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_55" begin="0.00" from="834989740#0" to="-113467539#1" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_56" begin="0.00" from="834989740#0" to="1069574886#3" via="154261209#6 641126492#3 1015040650#2" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_57" begin="0.00" from="E7" to="353612862#10" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_58" begin="0.00" from="E7" to="113467440#4" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_59" begin="0.00" from="E7" to="641126492#6" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_6" begin="0.00" from="519323439#0" to="E6" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_60" begin="0.00" from="E5" to="-113467539#1" via="641126492#1" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_61" begin="0.00" from="E5" to="113467440#4" end="3600.00" vehsPerHour="100.00"/>
+    <flow id="f_7" begin="0.00" from="519323439#0" to="154489976#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_8" begin="0.00" from="519323439#0" to="113467539#0" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_9" begin="0.00" from="519323439#0" to="154489976#1" end="3600.00" vehsPerHour="120.00"/>
+
+    <flow id="f_62" begin="0.00" from="E5" to="-113467509#1" via="-832118418#0 641126492#3" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_63" begin="0.00" from="E7" to="353612862#10" via="231177199#2" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_64" begin="0.00" from="-231177199#8" to="-113467539#1" via="-832118418#0 1015040609#3 -353612854#0 -641126492#1 834989739#1 580853946#2 580853946#5" end="3600.00" vehsPerHour="80.00"/>
+    <flow id="f_65" begin="0.00" from="-641126492#4" to="834985795#3" via="965584936#2 1015040609#3 353612854#2 833493239#1 154646651#7" end="3600.00" vehsPerHour="80.00"/>
+    <flow id="f_66" begin="0.00" from="834989740#3" to="E11" via="834989738#1 834989736#3 641126492#1 -833493243#4 353612862#5" end="3600.00" vehsPerHour="80.00"/>
+    <flow id="f_67" begin="0.00" from="834985796#2" to="E8" via="834985796#6 834985791#3 834985793#1 532529595#2" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_68" begin="0.00" from="833493245#1" to="E8" via="833493243#5 353612854#2 833493239#1" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_69" begin="0.00" from="113467539#3" to="1069574886#3" via="965584936#2 965584938#2 231177199#6 1015040650#4" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_70" begin="0.00" from="505097816#5" to="-231177199#0" via="505097816#8 1015040650#2 -231177199#8 832118418#1 154646651#4 154646651#7 834989740#3" end="3600.00" vehsPerHour="120.00"/>
+    <flow id="f_71" begin="0.00" from="154261208" to="-113467539#1" via="154261209#3 -353612854#0 641126492#2 -965584936#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_72" begin="0.00" from="519323439#0" to="E8" via="-231177199#8 -832118418#0 1015040609#3 353612854#2" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_73" begin="0.00" from="86096922#0" to="154489976#1" via="353612862#0 113467539#3 -641126492#2 -641126492#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_74" begin="0.00" from="-641126492#6" to="830627880#1" via="505097816#8" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_75" begin="0.00" from="641126492#6" to="154646651#10" via="965584938#2 -231177199#5 -231177199#3" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_76" begin="0.00" from="86096922#0" to="1015040609#9" via="-641126492#4 -641126492#2 -641126492#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_77" begin="0.00" from="113467539#0" to="E11" via="833493245#1 -641126492#1" end="3600.00" vehsPerHour="50.00"/>
+    <flow id="f_78" begin="0.00" from="-113467539#1" to="-113467509#1" end="3600.00" vehsPerHour="50.00"/>
+</routes>
