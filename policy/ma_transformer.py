@@ -178,8 +178,7 @@ class Decoder(nn.Module):
 
         # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
         # and 1 indicates raw continuous parameter.
-        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
-                                              nn.GELU())
+        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True), nn.GELU())
         # self.ln = nn.LayerNorm(embd_dim)
         self.blocks_dis = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
         self.blocks_con = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
@@ -242,22 +241,20 @@ class MultiAgentTransformer(nn.Module):
 
         self.to(self.device)
 
-    def evaluate_actions(self, obs, act_dis, act_con, decision_flag):
+    def evaluate_actions(self, obs, act_dis, act_con, last_act_dis, last_act_con, agent_to_update):
         """
         Get action logprobs / entropy for actor update.
 
         :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)  they will be preprocessed in the buffer, specifically from numpy to tensor.
         :param act_dis: (torch.Tensor) (batch_size, agent_num)
         :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
-        :param decision_flag: : (torch.tensor) (batch_size, agent_num, action_dim)
         :return:
         """
         batch_size = obs.shape[0]
         _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder, obs_rep, batch_size, self.agent_num,
-                                                                          self.action_dim, act_dis, act_con, decision_flag,
-                                                                          self.device)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder, obs_rep, batch_size, self.agent_num, self.action_dim,
+                                                                          act_dis, act_con, last_act_dis, last_act_con, agent_to_update, self.device)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -268,8 +265,7 @@ class MultiAgentTransformer(nn.Module):
         :return: (torch.Tensor) value function predictions
         """
         obs = check(obs).to(self.device)
-        with torch.no_grad():
-            values, _ = self.encoder(obs)
+        values, _ = self.encoder(obs)
 
         return values
 

@@ -34,6 +34,7 @@ class PPOBuffer:
         self.last_act_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
         self.logp_con_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.logp_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
+        self.agent_to_update = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
         self.gamma, self.lam = gamma, lam
         self.ptr, self.path_start_idx, self.max_size = 0, 0, num_steps
         self.end_idx = np.array([0])
@@ -97,7 +98,7 @@ class PPOBuffer:
         self.path_start_idx += end_idx
         self.ptr = self.path_start_idx
 
-    def store_trajectories(self, obs, rew, val, act_con, act_dis, logp_con, logp_dis, last_act_con, last_act_dis):
+    def store_trajectories(self, obs, rew, val, act_con, act_dis, logp_con, logp_dis, last_act_con, last_act_dis, agent_to_update):
         """
 `       Append one timestep of agent-environment interaction to the buffer.
         ### Inputs are batch of num_envs * num_agents ###
@@ -112,6 +113,7 @@ class PPOBuffer:
         self.logp_dis_buf[self.ptr] = logp_dis
         self.last_act_con_buf[self.ptr] = last_act_con
         self.last_act_dis_buf[self.ptr] = last_act_dis
+        self.agent_to_update[self.ptr] = agent_to_update
         self.ptr += 1
 
     def get(self):
@@ -119,8 +121,6 @@ class PPOBuffer:
         Call this at the end of a rollout round to retrieve the full information.
         :return:
         """
-        self.path_start_idx, self.ptr = 0, 0
-
         data = dict(
             obs=self.obs_buf[:self.ptr].reshape(-1, self.num_agents, self.len_his, self.obs_dim),
             act_con=self.act_con_buf[:self.ptr].reshape(-1, self.num_agents),
@@ -130,11 +130,16 @@ class PPOBuffer:
             last_act_con=self.last_act_con_buf[:self.ptr].reshape(-1, self.num_agents),
             last_act_dis=self.last_act_dis_buf[:self.ptr].reshape(-1, self.num_agents),
             adv=self.adv_buf[:self.ptr].reshape(-1, self.num_agents),
-            ret=self.ret_buf[:self.ptr].reshape(-1, self.num_agents)
+            ret=self.ret_buf[:self.ptr].reshape(-1, self.num_agents),
+            agent=self.agent_to_update[:self.ptr].reshape(-1, self.num_agents)
         )
+
+        self.path_start_idx, self.ptr = 0, 0
+
         return {
-            k: torch.as_tensor(v, dtype=torch.int64, device=torch.device('cuda')) if k in ['act_dix', 'last_act_dis']
-            else torch.as_tensor(v, dtype=torch.float32, device=torch.device('cuda')) for k, v in data.items()}
+            k: torch.as_tensor(v, dtype=torch.int64, device=torch.device('cuda')) if k in ['act_dis', 'last_act_dis', 'agent']
+            else torch.as_tensor(v, dtype=torch.float32, device=torch.device('cuda')) for k, v in data.items()
+        }
 
     def clear(self):
         self.ptr = 0

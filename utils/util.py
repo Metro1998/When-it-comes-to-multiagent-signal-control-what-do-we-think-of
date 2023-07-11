@@ -63,7 +63,7 @@ def map2real(raw_con, max_green):
     return ((raw_con + 1) * max_green / 2).astype(np.int32)
 
 
-def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, agent_to_update,
+def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, last_action_dis, last_action_con, agent_to_update,
                        device):
     hybrid_action = torch.zeros((batch_size, agent_num, action_dim + 2), dtype=torch.float32, device=device)
     hybrid_action[:, 0, 0] = 1
@@ -74,27 +74,22 @@ def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, acti
             logit = logits[:, i]
             mean = means[:, i]
             std = stds[:, i]
-            act_dis_ori = action_dis[:, i]
-            act_con_ori = action_con[:, i]
+            act_dis_ori = last_action_dis[:, i]
+            act_con_ori = last_action_con[:, i]
             agent_to_update_ = agent_to_update[:, i].bool()
 
-            mask = F.one_hot(act_dis_ori, num_classes=action_dim).bool()
-            logit_masked = logit.masked_fill(mask, float('-inf'))
-            logit_ = torch.where(agent_to_update_.view(-1, 1), logit_masked, logit)
-            dist_dis = Categorical(logits=logit_)  # the discrete distribution of all the agents
+            dist_dis = Categorical(logits=logit)  # the discrete distribution of all the agents
             act_dis_sam = dist_dis.sample()
-
             act_dis_ = torch.where(agent_to_update_, act_dis_sam, act_dis_ori)
 
-            mean_ = torch.where(agent_to_update_, torch.gather(mean, 1, act_dis_sam.unsqueeze(-1)).squeeze(), torch.gather(mean, 1, act_dis_ori.unsqueeze(-1)).squeeze())
-            std_ = torch.where(agent_to_update_, torch.gather(std, 1, act_dis_sam.unsqueeze(-1)).squeeze(), torch.gather(std, 1, act_dis_ori.unsqueeze(-1)).squeeze())
+            mean_ = torch.gather(mean, 1, act_dis_.unsqueeze(-1)).squeeze()
+            std_ = torch.gather(std, 1, act_dis_.unsqueeze(-1)).squeeze()
             dist_con = Normal(mean_, std_)
             act_con_ = torch.where(agent_to_update_, torch.tanh(dist_con.sample()), act_con_ori.float())
 
             act_logp_dis = dist_dis.log_prob(act_dis_)
             act_logp_con = dist_con.log_prob(act_con_)
 
-            #
             # if agent_to_update[:, i]:
             #     dist_dis = Categorical(logits=logit)
             #     act_dis = dist_dis.sample()
@@ -130,24 +125,25 @@ def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, acti
     return torch.transpose(output_act_dis, 0, 1), torch.transpose(output_logp_dis, 0, 1), torch.transpose(output_act_con, 0, 1), torch.transpose(output_logp_con, 0, 1)
 
 
-def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, decision_flag, device):
+def parallel_act(decoder, obs_rep, batch_size, agent_num, action_dim, action_dis, action_con, last_action_dis, last_action_con, agent_to_update, device):
     hybrid_action = torch.zeros((batch_size, agent_num, action_dim + 2), device=device)
     hybrid_action[:, 0, 0] = 1
     hybrid_action[:, 1:, 1:-1].copy_(F.one_hot(action_dis, num_classes=action_dim)[:, :-1, :])
-    hybrid_action[:, 1:, -1] = action_con.unsqueeze(-1)[:, :-1, :]
+    hybrid_action[:, 1:, -1] = action_con[:, :-1]
     logits, means, stds = decoder(hybrid_action, obs_rep)
 
-    action_dis_one_hot = F.one_hot(action_dis, num_classes=action_dim)
-    mask = decision_flag.unsqueeze(-1).float() * action_dis_one_hot
-    logits.masked_fill_(mask, float('-inf'))
     dist_dis = Categorical(logits=logits)
-    act_logp_dis = dist_dis.log_prob(action_dis)
+    act_dis_sam = dist_dis.sample()
+    act_dis_ori = last_action_dis
+    act_dis_ = torch.where(agent_to_update.bool(), act_dis_sam, act_dis_ori)
+    act_logp_dis = dist_dis.log_prob(act_dis_)
     entropy_dis = dist_dis.entropy()
 
-    means = means.gather(-1, action_dis.unsqueeze(-1)).squeeze(-1)
-    stds = stds.gather(-1, action_dis.unsqueeze(-1)).squeeze(-1)
+    means = means.gather(-1, act_dis_.unsqueeze(-1)).squeeze()
+    stds = stds.gather(-1, act_dis_.unsqueeze(-1)).squeeze()
     dist_con = Normal(means, stds)
-    act_logp_con = dist_con.log_prob(action_con)
+    act_con_ = torch.where(agent_to_update.bool(), torch.tanh(dist_con.sample()), last_action_con.float())
+    act_logp_con = dist_con.log_prob(act_con_)
     entropy_con = dist_con.entropy()
 
     return act_logp_dis, entropy_dis, act_logp_con, entropy_con

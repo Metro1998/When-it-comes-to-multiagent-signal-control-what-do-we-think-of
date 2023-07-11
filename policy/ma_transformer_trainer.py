@@ -36,36 +36,44 @@ class PPOTrainer:
         self.epochs = args.epochs
 
         # args.adam_eps is set to be 1e-5, recommended by "The 37 Implementation Details of Proximal Policy Optimization"
-        self.optimizer_actor_con = torch.optim.Adam([
-            {'params': self.policy_gpu.decoder.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps}])
-        # {'params': self.policy_gpu.decoder.log_std, 'lr': args.lr_std, 'eps': args.adam_eps}])
-        self.optimizer_actor_dis = torch.optim.Adam([
-            {'params': self.policy_gpu.decoder.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps}])
-        self.lr_scheduler_actor_con = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_con,
-                                                                             gamma=args.lr_decay_rate)
-        self.lr_scheduler_actor_dis = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_dis,
-                                                                             gamma=args.lr_decay_rate)
+        self.parameters_con = [
+            {'params': self.policy_gpu.decoder.action_embedding.parameters()},
+            {'params': self.policy_gpu.decoder.blocks_con.parameters()},
+            {'params': self.policy_gpu.decoder.head_con.parameters()},
+            {'params': self.policy_gpu.decoder.fc_mean.parameters()},
+            {'params': self.policy_gpu.decoder.fc_std.parameters()}
+        ]
+        self.optimizer_actor_con = torch.optim.Adam(self.parameters_con, lr=args.lr_actor_con, eps=args.adam_eps)
 
-        self.optimizer_critic = torch.optim.Adam([{'params': self.policy_gpu.encoder.parameters(), 'lr': args.lr_critic}])
-        self.lr_scheduler_critic = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_critic,
-                                                                          gamma=args.lr_decay_rate)
+        self.parameters_dis = [
+            {'params': self.policy_gpu.decoder.action_embedding.parameters()},
+            {'params': self.policy_gpu.decoder.blocks_dis.parameters()},
+            {'params': self.policy_gpu.decoder.head_dis.parameters()}
+        ]
+        self.optimizer_actor_dis = torch.optim.Adam(self.parameters_dis, lr=args.lr_actor_con, eps=args.adam_eps)
+
+        self.optimizer_critic = torch.optim.Adam(self.policy_gpu.encoder.parameters(), lr=args.lr_critic, eps=args.adam_eps)
+
+        self.lr_scheduler_actor_con = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_con, gamma=args.lr_decay_rate)
+        self.lr_scheduler_actor_dis = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_dis, gamma=args.lr_decay_rate)
+        self.lr_scheduler_critic = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_critic, gamma=args.lr_decay_rate)
         self.loss_func = nn.SmoothL1Loss(reduction='mean')
 
     def update(self):
 
         sample_dic = self.buffer.get()
-        total_len = sample_dic['obs'].size(0)
+        total_len = sample_dic['obs'].size()[0]
         update_dis_actor, update_con_actor = 1, 1
 
-        for i in self.epochs:
+        for _ in range(self.epochs):
             # Recompute values at the beginning of each epoch
             # advantage, return_ = self.recompute(obs, rew, end_idx)
 
-            sampler_critic = list(BatchSampler(
-                sampler=SubsetRandomSampler(total_len),
+            sampler = list(BatchSampler(
+                sampler=SubsetRandomSampler(range(total_len)),
                 batch_size=self.batch_size,
                 drop_last=True))
-            for indices in sampler_critic:
+            for indices in sampler:
                 obs_batch = sample_dic['obs'][indices]
                 act_con_batch = sample_dic['act_con'][indices]
                 act_dis_batch = sample_dic['act_dis'][indices]
@@ -75,10 +83,12 @@ class PPOTrainer:
                 last_act_dis_batch = sample_dic['last_act_dis'][indices]
                 adv_batch = sample_dic['adv'][indices]
                 ret_batch = sample_dic['ret'][indices]
+                agent_batch = sample_dic['agent'][indices]
 
                 # Advantage normalization
                 # In particular, this normalization happens at the minibatch level instead of the whole batch level!
-                adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8)
+                joint_adv_batch = torch.mean(adv_batch, dim=-1, keepdim=True)
+                joint_adv_batch = (joint_adv_batch - joint_adv_batch.mean()) / (joint_adv_batch.std() + 1e-8)
 
                 ### Update encoder ###
                 ## Calculate the gradient of critic ##
@@ -92,15 +102,13 @@ class PPOTrainer:
 
                 ### Update decoders ###
                 new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy_gpu.evaluate_actions(
-                    obs_batch,
-                    act_dis_batch,
-                    act_con_batch)
+                    obs_batch, act_dis_batch, act_con_batch, last_act_dis_batch, last_act_con_batch, agent_batch)
 
                 if update_dis_actor:
                     ## Calculate the gradient of discrete actor ##
                     imp_weights = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
-                    surr1 = imp_weights * adv_batch
-                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_batch
+                    surr1 = imp_weights * joint_adv_batch
+                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
                     loss_pi_dis = - (torch.min(surr1, surr2) + self.entropy_coef_dis * entropy_dis).mean()
 
                     with torch.no_grad():
@@ -108,18 +116,16 @@ class PPOTrainer:
                         approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
 
                     self.optimizer_actor_dis.zero_grad()
-                    loss_pi_dis.backward()
-                    torch.nn.utils.clip_grad_norm_(self.policy_gpu.decoder_dis.parameters(), norm_type=2, max_norm=self.max_grad_norm)
+                    loss_pi_dis.backward(retain_graph=True)
+                    [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_dis]
                     self.optimizer_actor_dis.step()
 
                 if update_con_actor:
                     ## Calculate the gradient of continuous actor ##
-                    old_logp_con_batch = old_logp_con_batch.gather(1, act_dis_batch.view(-1, 1)).squeeze()
-                    new_logp_con_batch = new_logp_con_batch.gather(1, act_dis_batch.view(-1, 1)).squeeze()
 
                     imp_weights = torch.exp(new_logp_con_batch - old_logp_con_batch)
-                    surr1 = imp_weights * adv_batch
-                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * adv_batch
+                    surr1 = imp_weights * joint_adv_batch
+                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
 
                     # Andrychowicz, et al. (2021) overall find no evidence that the entropy term improves performance on
                     # continuous control environments.
@@ -131,7 +137,7 @@ class PPOTrainer:
 
                     self.optimizer_actor_con.zero_grad()
                     loss_pi_con.backward()
-                    torch.nn.utils.clip_grad_norm_(self.policy_gpu.decoder_con.parameters(), norm_type=2, max_norm=self.max_grad_norm)
+                    [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_con]
                     self.optimizer_actor_con.step()
 
             if approx_kl_dis > self.target_kl_dis:
