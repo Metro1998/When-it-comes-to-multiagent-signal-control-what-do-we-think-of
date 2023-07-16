@@ -9,11 +9,12 @@ from utils.util import *
 from policy.ma_transformer import MultiAgentTransformer
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
 from policy.rollout_buffer import PPOBuffer
+from torch.utils.tensorboard import SummaryWriter
 
 
 class PPOTrainer:
 
-    def __init__(self, args):
+    def __init__(self, writer, args):
         """
 
         :param args:
@@ -34,6 +35,8 @@ class PPOTrainer:
         self.gamma = args.gamma
         self.lam = args.lam
         self.epochs = args.epochs
+        self.writer = writer
+        self.update_step = 0
 
         # args.adam_eps is set to be 1e-5, recommended by "The 37 Implementation Details of Proximal Policy Optimization"
         self.parameters_con = [
@@ -140,10 +143,18 @@ class PPOTrainer:
                     [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_con]
                     self.optimizer_actor_con.step()
 
+            self.writer.add_scalar('loss/critic', critic_loss, self.update_step * self.epochs + _)
+            self.writer.add_scalars('loss/actor', {'discrete_head': loss_pi_dis, 'continuous_head': loss_pi_con}, self.update_step * self.epochs + _)
+            self.writer.add_scalars('entropy', {'discrete_head': entropy_dis.mean(), 'continuous_head': entropy_con.mean()}, self.update_step * self.epochs + _)
+            self.writer.add_scalars('approx_kl', {'discrete_head': approx_kl_dis, 'continuous_head': approx_kl_con}, self.update_step * self.epochs + _)
+            self.writer.flush()
+
             if approx_kl_dis > self.target_kl_dis:
                 update_dis_actor = 0
             if approx_kl_con > self.target_kl_con:
                 update_con_actor = 0
+
+        self.update_step += 1
 
     # def recompute(self, observation, reward, end_idx):
     #     """

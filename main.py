@@ -1,5 +1,6 @@
 from collections import deque
 import argparse
+import json
 import gymnasium as gym
 import numpy as np
 import time
@@ -7,6 +8,7 @@ from utils.util import *
 from policy.ma_transformer import MultiAgentTransformer
 from policy.ma_transformer_trainer import PPOTrainer
 from policy.rollout_buffer import PPOBuffer
+from torch.utils.tensorboard import SummaryWriter
 
 # from policy.rollout_buffer import
 
@@ -30,6 +32,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')
     parser.add_argument('--lam', type=float, default=0.9, help='Lambda parameter for GAE.')
     parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs.')
+    parser.add_argument('--comment', type=str, default='_test', help='Comment for tensorboard.')
 
     # 添加Adam优化器参数
     parser.add_argument('--lr_actor_con', type=float, default=0.003, help='Learning rate for continuous actor.')
@@ -54,6 +57,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_sample_step', type=int, default=3600, help='Maximum steps per sample.')
 
     args = parser.parse_args()
+    with open('runs/args/' + args.comment + '.txt', 'w') as f:
+        json.dump(args.__dict__, f, indent=2)
 
     """ ALGORITHM PARAMETERS """
     gamma = 0.99
@@ -64,7 +69,8 @@ if __name__ == '__main__':
     obs_dim = 8
 
     """ AGENT SETUP """
-    trainer = PPOTrainer(args)
+    writer = SummaryWriter(comment=args.comment)
+    trainer = PPOTrainer(writer, args)
 
     """ ENVIRONMENT SETUP """
     yellow = 3
