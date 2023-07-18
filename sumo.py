@@ -77,7 +77,7 @@ class TrafficSignal:
 
         Args:
             env (SumoEnvironment): The environment this traffic signal belongs to.
-            ts_id (str): The id of the traffic signal.
+            ts_id (str): The ids of the traffic signal.
             delta_time (int): The time in seconds between stages.
             yellow_time (int): The time in seconds of the yellow phase.
             min_green (int): The minimum time in seconds of the green phase.

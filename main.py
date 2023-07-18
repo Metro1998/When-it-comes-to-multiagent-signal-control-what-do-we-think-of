@@ -23,21 +23,21 @@ if __name__ == '__main__':
     parser.add_argument('--std_clip', type=float, default=[0.1, 0.4], help='Standard deviation clip value.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--clip_ratio', type=float, default=0.2, help='Clip ratio.')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size.')
+    parser.add_argument('--batch_size', type=int, default=256, help='Batch size.')
     parser.add_argument('--entropy_coef_dis', type=float, default=0.005, help='Entropy coefficient for discrete action.')
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
     parser.add_argument('--max_grad_norm', type=float, default=0.5, help='Maximum gradient norm.')
-    parser.add_argument('--target_kl_dis', type=float, default=0.01, help='Target KL divergence for discrete action.')
-    parser.add_argument('--target_kl_con', type=float, default=0.01, help='Target KL divergence for continuous action.')
+    parser.add_argument('--target_kl_dis', type=float, default=0.025, help='Target KL divergence for discrete action.')
+    parser.add_argument('--target_kl_con', type=float, default=0.05, help='Target KL divergence for continuous action.')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')
     parser.add_argument('--lam', type=float, default=0.9, help='Lambda parameter for GAE.')
     parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs.')
     parser.add_argument('--comment', type=str, default='_test', help='Comment for tensorboard.')
 
     # 添加Adam优化器参数
-    parser.add_argument('--lr_actor_con', type=float, default=0.003, help='Learning rate for continuous actor.')
+    parser.add_argument('--lr_actor_con', type=float, default=0.0003, help='Learning rate for continuous actor.')
     parser.add_argument('--lr_std', type=float, default=0.02, help='Learning rate for std deviation.')
-    parser.add_argument('--lr_actor_dis', type=float, default=0.003, help='Learning rate for discrete actor.')
+    parser.add_argument('--lr_actor_dis', type=float, default=0.0003, help='Learning rate for discrete actor.')
     parser.add_argument('--adam_eps', type=float, default=1e-5, help='Epsilon value for Adam optimizer.')
     parser.add_argument('--lr_decay_rate', type=float, default=0.005, help='Learning rate decay rate.')
     parser.add_argument('--lr_critic', type=float, default=0.001, help='Learning rate for critic.')
@@ -49,12 +49,12 @@ if __name__ == '__main__':
     # 环境设置
     parser.add_argument('--yellow', type=int, default=3, help='Duration of yellow phase in seconds.')
     parser.add_argument('--stage_num', type=int, default=8, help='Number of stages in the traffic signal.')
-    parser.add_argument('--env_num', type=int, default=2, help='Number of parallel environments.')
+    parser.add_argument('--env_num', type=int, default=10, help='Number of parallel environments.')
     parser.add_argument('--local_net_file', type=str, default='envs/roadnet.net.xml', help='Path to local net file.')
     parser.add_argument('--local_route_file', type=str, default='envs/roadnet.rou.xml', help='Path to local route file.')
     parser.add_argument('--local_addition_file', type=str, default='envs/roadnet.add.xml', help='Path to local addition file.')
-    parser.add_argument('--max_episode_step', type=int, default=3600 * 6, help='Maximum steps per episode.')
-    parser.add_argument('--max_sample_step', type=int, default=3600, help='Maximum steps per sample.')
+    # parser.add_argument('--max_episode_step', type=int, default=4800, help='Maximum steps per episode.')
+    # parser.add_argument('--max_sample_step', type=int, default=3600, help='Maximum steps per sample.')
 
     args = parser.parse_args()
     with open('runs/args/' + args.comment + '.txt', 'w') as f:
@@ -75,14 +75,13 @@ if __name__ == '__main__':
     """ ENVIRONMENT SETUP """
     yellow = 3
     stage_num = 8
-    env_num = 2
+    env_num = 10
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 100000
-    max_sample_step = 200
+    max_episode_step = 4800
+    max_sample_step = 600
     pattern = 'queue'
-    st = time.time()
     env = gym.vector.AsyncVectorEnv([
         lambda i=i: gym.make('sumo-rl-v1',
                              yellow=[yellow] * agent_num,
@@ -94,13 +93,25 @@ if __name__ == '__main__':
                              pattern=pattern,
                              max_episode_step=max_episode_step,
                              max_sample_step=max_sample_step,
+                             comment=args.comment,
                              ) for i in range(env_num)
 
     ])
+    # st = time.time()
+    # _, _ = env.reset()
+    # cnt = 0
+    # while 1:
+    #     action = env.action_space.sample()
+    #     _, _, _, _, info = env.step(action)
+    #     cnt += 1
+    #     if info['termi']:
+    #         break
+    # print(cnt)
+    # print('---------------------------------------Env step time: ', time.time() - st)
 
     # """ TRAINING LOGIC """
     for episode in range(total_episodes):
-
+        test_st = time.time()
         # rollout phase
         obs_history = np.zeros((max_episode_step * 2, env_num, agent_num, obs_dim), dtype=np.float32)
         next_obs, info = env.reset()
@@ -120,21 +131,30 @@ if __name__ == '__main__':
             agent_to_update = np.array([info['agents_to_update'][i] for i in range(env_num)])
 
             # Get action from the agent
+            st = time.time()
             act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, last_act_dis=last_act_dis, last_act_con=remap(last_act_con, 40), agent_to_update=agent_to_update)
+            print('act time: ', time.time() - st)
             # Execute the environment and log data
             action = {'duration': map2real(act_con, 40), 'stage': act_dis}
-            next_obs, reward, termi, _, info = env.step(action)
-            trainer.buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis, last_act_con, last_act_dis, agent_to_update)
+            st = time.time()
+            next_obs, reward, _, _, info = env.step(action)
+            print('env step time: ', time.time() - st)
+            trainer.buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis, remap(last_act_con, 40), last_act_dis, agent_to_update)
 
             trunc = np.array([info['trunc'][i] for i in range(env_num)])
-            if termi.any() or trunc.any():
+            termi = np.array([info['termi'][i] for i in range(env_num)])
+            # todo
+            if trunc.all():
                 critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
                 trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
-                # if termi.any():
-                #     break
                 trainer.update()
+                trainer.copy_parameter()
+            if termi.all():
+                print('---------------------------------------Test time: ', time.time() - test_st)
+                break
 
         # update phase
         # TODO 自动对齐 以及 类型转换 以及 reset buffer 以及 update 以及 util 简化计算
+        # 读出数据
 
 

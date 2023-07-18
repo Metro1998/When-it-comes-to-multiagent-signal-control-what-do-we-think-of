@@ -290,6 +290,6 @@ class MultiAgentTransformer(nn.Module):
 
         act_dis, logp_dis, act_con, logp_con = \
             autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, last_act_dis, last_act_con,
-                               agent_to_update, self.device)
+                               agent_to_update, self.device)  # todo 把auto写到decoder底下
 
         return act_dis.numpy(), logp_dis.numpy(), act_con.numpy(), logp_con.numpy(), values.numpy()

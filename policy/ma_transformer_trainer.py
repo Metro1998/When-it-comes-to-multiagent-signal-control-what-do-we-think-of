@@ -22,7 +22,7 @@ class PPOTrainer:
 
         self.policy_gpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, device='cuda:0')
         self.policy_cpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, device='cpu')
-        self.buffer = PPOBuffer(10000, args.env_num, args.agent_num, args.obs_dim, args.history_len, args.gamma, args.lam)
+        self.buffer = PPOBuffer(2000, args.env_num, args.agent_num, args.obs_dim, args.history_len, args.gamma, args.lam)
         self.random_seed = args.random_seed
         self.agent_num = args.agent_num
         self.clip_ratio = args.clip_ratio
@@ -117,6 +117,7 @@ class PPOTrainer:
                     with torch.no_grad():
                         # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
                         approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
+                    print('-----------------approx_kl_dis: ------------------', approx_kl_dis.item())
 
                     self.optimizer_actor_dis.zero_grad()
                     loss_pi_dis.backward(retain_graph=True)
@@ -196,4 +197,6 @@ class PPOTrainer:
 
     def copy_parameter(self):
         source_params = torch.nn.utils.parameters_to_vector(self.policy_gpu.parameters())
-        torch.nn.utils.vector_to_parameters(source_params, self.policy_cpu.parameters())
+        torch.nn.utils.vector_to_parameters(source_params.cpu(), self.policy_cpu.parameters())
+
+
