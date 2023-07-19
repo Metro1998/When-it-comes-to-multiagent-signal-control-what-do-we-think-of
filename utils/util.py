@@ -53,7 +53,7 @@ def remap(time_remaining, max_green):
     :param max_green:
     :return:
     """
-    return -1 + 2 * time_remaining / max_green
+    return (-1 + 2 * time_remaining / max_green).astype(np.float32)
 
 
 def map2real(raw_con, max_green):

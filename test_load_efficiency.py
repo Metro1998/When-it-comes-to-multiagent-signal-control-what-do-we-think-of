@@ -1,7 +1,9 @@
-from scipy.special import comb
+import numpy as np
 
-n = 8
-k = 2
+mask = np.array([
+    [1, 0, 1, 0],
+    [0, 0, 0, 1]
+])
 
-probability = comb(n, 1) / (2 ** n)
-print("每一列有一个1的概率：", probability)
+a = np.random.randint(0, 10, (2, 4, 3))
+print(a[mask == 1])

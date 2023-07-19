@@ -151,8 +151,10 @@ class Encoder(nn.Module):
         self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
 
         # There are agent_num heads, because we approximate state value of each agent separately.
-        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(), nn.LayerNorm(embd_dim),
-                                  init_(nn.Linear(embd_dim, 1)))  # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
+                                  nn.LayerNorm(embd_dim),
+                                  init_(nn.Linear(embd_dim,
+                                                  1)))  # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
 
     def forward(self, obs):
         """
@@ -175,10 +177,12 @@ class Decoder(nn.Module):
 
         self.action_dim = action_dim
         self.embd_dim = embd_dim
+        self.agent_num = agent_num
 
         # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
         # and 1 indicates raw continuous parameter.
-        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True), nn.GELU())
+        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
+                                              nn.GELU())
         # self.ln = nn.LayerNorm(embd_dim)
         self.blocks_dis = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
         self.blocks_con = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
@@ -211,6 +215,89 @@ class Decoder(nn.Module):
         means = self.fc_mean(var_con)  # (B, N, action_dim)
         stds = torch.clamp(F.softplus(self.fc_std(var_con)), min=self.std_clip[0], max=self.std_clip[1])
         return logits, means, stds
+
+    def autoregressive_act(self, obs_rep, act_dis_infer, act_con_infer, agent_to_update):
+        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), dtype=torch.float32,
+                                    device=torch.device('cpu'))
+        hybrid_action[:, 0, 0] = 1
+        for i in range(self.agent_num):
+
+            # For agent_i in the batch, there is at least one to update
+            if agent_to_update[:, i].sum() > 0:
+                with torch.no_grad():
+                    logits, means, stds = self.forward(hybrid_action, obs_rep)
+                    logit = logits[:, i]
+                    mean = means[:, i]
+                    std = stds[:, i]
+                    agent_to_update_ = agent_to_update[:, i].bool()
+
+                    dist_dis = Categorical(logits=logit)  # Batch discrete distributions
+                    act_dis_ = torch.where(agent_to_update_, dist_dis.sample(), act_dis_infer[:, i])
+
+                    mean_ = torch.gather(mean, 1, act_dis_.unsqueeze(-1)).squeeze()
+                    std_ = torch.gather(std, 1, act_dis_.unsqueeze(-1)).squeeze()
+                    dist_con = Normal(mean_, std_)
+                    act_con_ = torch.where(agent_to_update_, torch.tanh(dist_con.sample()), act_con_infer[:, i])
+
+                    act_logp_dis = torch.where(agent_to_update_, dist_dis.log_prob(act_dis_),
+                                               torch.zeros_like(act_dis_, dtype=torch.float32,
+                                                                device=torch.device('cpu')))
+                    act_logp_con = torch.where(agent_to_update_, dist_con.log_prob(act_con_),
+                                               torch.zeros_like(act_con_, dtype=torch.float32,
+                                                                device=torch.device('cpu')))
+
+                    # act_logp_dis = dist_dis.log_prob(act_dis_)
+                    # act_logp_con = dist_con.log_prob(act_con_)
+
+            # For agent_i in the batch, there is no one need to update
+            else:
+                act_dis_ = act_dis_infer[:, i]
+                act_con_ = act_con_infer[:, i]
+                # Padding
+                act_logp_dis = torch.zeros_like(act_dis_, dtype=torch.float32, device=torch.device('cpu'))
+                act_logp_con = torch.zeros_like(act_con_, dtype=torch.float32, device=torch.device('cpu'))
+
+            if i + 1 < self.agent_num:
+                hybrid_action[:, i + 1, 1:-1].copy_(F.one_hot(act_dis_, num_classes=self.action_dim).float())
+                hybrid_action[:, i + 1, -1] = act_con_
+
+            if i == 0:
+                output_act_dis = act_dis_.unsqueeze(0)
+                output_act_con = act_con_.unsqueeze(0)
+                output_logp_dis = act_logp_dis.unsqueeze(0)
+                output_logp_con = act_logp_con.unsqueeze(0)
+            else:
+                output_act_dis = torch.cat((output_act_dis, act_dis_.unsqueeze(0)), dim=0)
+                output_act_con = torch.cat((output_act_con, act_con_.unsqueeze(0)), dim=0)
+                output_logp_dis = torch.cat((output_logp_dis, act_logp_dis.unsqueeze(0)), dim=0)
+                output_logp_con = torch.cat((output_logp_con, act_logp_con.unsqueeze(0)), dim=0)
+
+        return torch.t(output_act_dis).numpy(), torch.t(output_logp_dis).numpy(), torch.t(
+            output_act_con).numpy(), torch.t(output_logp_con).numpy()
+
+    def parallel_act(self, obs_rep, act_dis_exec, act_con_exec, act_dis_infer, act_con_infer, agent_to_update):
+
+        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), device=torch.device('cuda'))
+        action_dis = torch.where(agent_to_update.bool(), act_dis_exec, act_dis_infer)
+        action_con = torch.where(agent_to_update.bool(), act_con_exec, act_con_infer)
+        hybrid_action[:, 0, 0] = 1
+        hybrid_action[:, 1:, 1:-1].copy_(F.one_hot(action_dis, num_classes=self.action_dim)[:, :-1, :])
+        hybrid_action[:, 1:, -1] = action_con[:, :-1]
+        logits, means, stds = self.forward(hybrid_action, obs_rep)
+
+        dist_dis = Categorical(logits=logits)
+        act_dis_ = torch.where(agent_to_update.bool(), act_dis_exec, act_dis_infer)
+        act_logp_dis = dist_dis.log_prob(act_dis_)[agent_to_update == 1]
+        entropy_dis = dist_dis.entropy()[agent_to_update == 1]  # todo fix
+
+        means = means.gather(-1, act_dis_.unsqueeze(-1)).squeeze()
+        stds = stds.gather(-1, act_dis_.unsqueeze(-1)).squeeze()
+        dist_con = Normal(means, stds)
+        act_con_ = torch.where(agent_to_update.bool(), act_con_exec, act_con_infer)
+        act_logp_con = dist_con.log_prob(act_con_)[agent_to_update == 1]
+        entropy_con = dist_con.entropy()[agent_to_update == 1]
+
+        return act_logp_dis, entropy_dis, act_logp_con, entropy_con
 
 
 class MultiAgentTransformer(nn.Module):
@@ -250,11 +337,9 @@ class MultiAgentTransformer(nn.Module):
         :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
         :return:
         """
-        batch_size = obs.shape[0]
         _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis, act_log_con, entropy_con = parallel_act(self.decoder, obs_rep, batch_size, self.agent_num, self.action_dim,
-                                                                          act_dis, act_con, last_act_dis, last_act_con, agent_to_update, self.device)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con, last_act_dis, last_act_con, agent_to_update)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -269,27 +354,29 @@ class MultiAgentTransformer(nn.Module):
 
         return values
 
-    def act(self, obs, last_act_dis, last_act_con, agent_to_update):
+    def act(self, obs, act_dis_infer, act_con_infer, agent_to_update):
         """
         Compute stages and value function predictions for the given inputs.
 
         :param obs:
-        :param last_act_dis: the last step's discrete actions, for masking the discrete action space if it time to act.
-        :param last_act_con: the last step's continuous actions, for deciding whether to infer(map2real(last_act_con) < 0.1) on the current step.
+        :param act_dis_infer: the last step's discrete actions, for masking the discrete action space if it time to act.
+        :param act_con_infer: the last step's continuous actions, for deciding whether to infer(map2real(act_con_infer) < 0.1) on the current step.
         :param agent_to_update:
         :return:
         """
         obs = check(obs).to(self.device)
-        last_act_dis = check(last_act_dis).to(self.device)
-        last_act_con = check(last_act_con).to(self.device)
+        act_dis_infer = check(act_dis_infer).to(self.device)
+        act_con_infer = check(act_con_infer).to(self.device)
         agent_to_update = check(agent_to_update).to(self.device)
 
         with torch.no_grad():
             values, obs_rep = self.encoder(obs)
-        env_num = obs.shape[0]
 
-        act_dis, logp_dis, act_con, logp_con = \
-            autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, last_act_dis, last_act_con,
-                               agent_to_update, self.device)  # todo 把auto写到decoder底下
+        # act_dis, logp_dis, act_con, logp_con = \
+        #     autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, act_dis_infer, act_con_infer,
+        #                        agent_to_update, self.device)  # todo 把auto写到decoder底下
 
-        return act_dis.numpy(), logp_dis.numpy(), act_con.numpy(), logp_con.numpy(), values.numpy()
+        act_dis, logp_dis, act_con, logp_con = self.decoder.autoregressive_act(obs_rep, act_dis_infer, act_con_infer,
+                                                                               agent_to_update)
+
+        return act_dis, logp_dis, act_con, logp_con, values

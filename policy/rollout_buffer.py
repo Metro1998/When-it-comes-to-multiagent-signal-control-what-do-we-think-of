@@ -30,8 +30,8 @@ class PPOBuffer:
         self.ret_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.act_con_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.act_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
-        self.last_act_con_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
-        self.last_act_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
+        self.act_con_infer_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
+        self.act_dis_infer_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
         self.logp_con_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.logp_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.agent_to_update = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
@@ -98,22 +98,23 @@ class PPOBuffer:
         self.path_start_idx += end_idx
         self.ptr = self.path_start_idx
 
-    def store_trajectories(self, obs, rew, val, act_con, act_dis, logp_con, logp_dis, last_act_con, last_act_dis, agent_to_update):
+    def store_trajectories(self, obs, act_dis_infer, act_con_infer, agent_to_update, act_dis, act_con, logp_dis, logp_con, val, rew):
         """
 `       Append one timestep of agent-environment interaction to the buffer.
         ### Inputs are batch of num_envs * num_agents ###
         """
         assert self.ptr < self.max_size
         self.obs_buf[self.ptr] = obs
-        self.rew_buf[self.ptr] = rew
-        self.val_buf[self.ptr] = val
-        self.act_con_buf[self.ptr] = act_con
-        self.act_dis_buf[self.ptr] = act_dis
-        self.logp_con_buf[self.ptr] = logp_con
-        self.logp_dis_buf[self.ptr] = logp_dis
-        self.last_act_con_buf[self.ptr] = last_act_con
-        self.last_act_dis_buf[self.ptr] = last_act_dis
+        self.act_dis_infer_buf[self.ptr] = act_dis_infer
+        self.act_con_infer_buf[self.ptr] = act_con_infer
         self.agent_to_update[self.ptr] = agent_to_update
+        self.act_dis_buf[self.ptr] = act_dis
+        self.act_con_buf[self.ptr] = act_con
+        self.logp_dis_buf[self.ptr] = logp_dis
+        self.logp_con_buf[self.ptr] = logp_con
+        self.val_buf[self.ptr] = val
+        self.rew_buf[self.ptr] = rew
+
         self.ptr += 1
 
     def get(self):
@@ -123,12 +124,12 @@ class PPOBuffer:
         """
         data = dict(
             obs=self.obs_buf[:self.ptr].reshape(-1, self.num_agents, self.len_his, self.obs_dim),
-            act_con=self.act_con_buf[:self.ptr].reshape(-1, self.num_agents),
+            act_dis_infer=self.act_dis_infer_buf[:self.ptr].reshape(-1, self.num_agents),
+            act_con_infer=self.act_con_infer_buf[:self.ptr].reshape(-1, self.num_agents),
             act_dis=self.act_dis_buf[:self.ptr].reshape(-1, self.num_agents),
-            logp_con=self.logp_con_buf[:self.ptr].reshape(-1, self.num_agents),
+            act_con=self.act_con_buf[:self.ptr].reshape(-1, self.num_agents),
             logp_dis=self.logp_dis_buf[:self.ptr].reshape(-1, self.num_agents),
-            last_act_con=self.last_act_con_buf[:self.ptr].reshape(-1, self.num_agents),
-            last_act_dis=self.last_act_dis_buf[:self.ptr].reshape(-1, self.num_agents),
+            logp_con=self.logp_con_buf[:self.ptr].reshape(-1, self.num_agents),
             adv=self.adv_buf[:self.ptr].reshape(-1, self.num_agents),
             ret=self.ret_buf[:self.ptr].reshape(-1, self.num_agents),
             agent=self.agent_to_update[:self.ptr].reshape(-1, self.num_agents)
@@ -137,6 +138,6 @@ class PPOBuffer:
         self.path_start_idx, self.ptr = 0, 0
 
         return {
-            k: torch.as_tensor(v, dtype=torch.int64, device=torch.device('cuda')) if k in ['act_dis', 'last_act_dis', 'agent']
+            k: torch.as_tensor(v, dtype=torch.int64, device=torch.device('cuda')) if k in ['act_dis', 'act_dis_infer', 'agent']
             else torch.as_tensor(v, dtype=torch.float32, device=torch.device('cuda')) for k, v in data.items()
         }

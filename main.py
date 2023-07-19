@@ -49,7 +49,7 @@ if __name__ == '__main__':
     # 环境设置
     parser.add_argument('--yellow', type=int, default=3, help='Duration of yellow phase in seconds.')
     parser.add_argument('--stage_num', type=int, default=8, help='Number of stages in the traffic signal.')
-    parser.add_argument('--env_num', type=int, default=10, help='Number of parallel environments.')
+    parser.add_argument('--env_num', type=int, default=6, help='Number of parallel environments.')
     parser.add_argument('--local_net_file', type=str, default='envs/roadnet.net.xml', help='Path to local net file.')
     parser.add_argument('--local_route_file', type=str, default='envs/roadnet.rou.xml', help='Path to local route file.')
     parser.add_argument('--local_addition_file', type=str, default='envs/roadnet.add.xml', help='Path to local addition file.')
@@ -75,7 +75,7 @@ if __name__ == '__main__':
     """ ENVIRONMENT SETUP """
     yellow = 3
     stage_num = 8
-    env_num = 10
+    env_num = 6
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
@@ -126,20 +126,21 @@ if __name__ == '__main__':
             obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
             history_ptr += 1
 
-            last_act_dis = np.zeros((env_num, agent_num), dtype=np.int64) if act_dis is None else act_dis
-            last_act_con = np.array([info['left_time'][i] for i in range(env_num)])
+            act_dis_infer = np.zeros((env_num, agent_num), dtype=np.int64) if act_dis is None else act_dis
+            act_con_infer = np.array([info['left_time'][i] for i in range(env_num)])
             agent_to_update = np.array([info['agents_to_update'][i] for i in range(env_num)])
 
             # Get action from the agent
             st = time.time()
-            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, last_act_dis=last_act_dis, last_act_con=remap(last_act_con, 40), agent_to_update=agent_to_update)
+            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=remap(act_con_infer, 40), agent_to_update=agent_to_update)
             print('act time: ', time.time() - st)
             # Execute the environment and log data
             action = {'duration': map2real(act_con, 40), 'stage': act_dis}
             st = time.time()
             next_obs, reward, _, _, info = env.step(action)
             print('env step time: ', time.time() - st)
-            trainer.buffer.store_trajectories(obs_rnn, reward, value, act_con, act_dis, logp_con, logp_dis, remap(last_act_con, 40), last_act_dis, agent_to_update)
+            trainer.buffer.store_trajectories(obs_rnn, act_dis_infer, remap(act_con_infer, 40), agent_to_update,
+                                              act_dis, act_con, logp_dis, logp_con, value, reward)
 
             trunc = np.array([info['trunc'][i] for i in range(env_num)])
             termi = np.array([info['termi'][i] for i in range(env_num)])
