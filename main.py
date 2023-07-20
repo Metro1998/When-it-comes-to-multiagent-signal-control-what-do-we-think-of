@@ -131,14 +131,14 @@ if __name__ == '__main__':
             agent_to_update = np.array([info['agents_to_update'][i] for i in range(env_num)])
 
             # Get action from the agent
-            st = time.time()
+            # st = time.time()
             act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=remap(act_con_infer, 40), agent_to_update=agent_to_update)
-            print('act time: ', time.time() - st)
+            # print('act time: ', time.time() - st)
             # Execute the environment and log data
             action = {'duration': map2real(act_con, 40), 'stage': act_dis}
-            st = time.time()
+            # st = time.time()
             next_obs, reward, _, _, info = env.step(action)
-            print('env step time: ', time.time() - st)
+            # print('env step time: ', time.time() - st)
             trainer.buffer.store_trajectories(obs_rnn, act_dis_infer, remap(act_con_infer, 40), agent_to_update,
                                               act_dis, act_con, logp_dis, logp_con, value, reward)
 
@@ -149,7 +149,6 @@ if __name__ == '__main__':
                 critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
                 trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
                 trainer.update()
-                trainer.copy_parameter()
             if termi.all():
                 print('---------------------------------------Test time: ', time.time() - test_st)
                 break

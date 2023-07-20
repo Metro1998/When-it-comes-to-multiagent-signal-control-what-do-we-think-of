@@ -328,7 +328,7 @@ class MultiAgentTransformer(nn.Module):
 
         self.to(self.device)
 
-    def evaluate_actions(self, obs, act_dis, act_con, last_act_dis, last_act_con, agent_to_update):
+    def evaluate_actions(self, obs, act_dis, act_con, act_dis_infer, act_con_infer, agent_to_update):
         """
         Get action logprobs / entropy for actor update.
 
@@ -339,7 +339,7 @@ class MultiAgentTransformer(nn.Module):
         """
         _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con, last_act_dis, last_act_con, agent_to_update)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con, act_dis_infer, act_con_infer, agent_to_update)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -371,10 +371,6 @@ class MultiAgentTransformer(nn.Module):
 
         with torch.no_grad():
             values, obs_rep = self.encoder(obs)
-
-        # act_dis, logp_dis, act_con, logp_con = \
-        #     autoregressive_act(self.decoder, obs_rep, env_num, self.agent_num, self.action_dim, act_dis_infer, act_con_infer,
-        #                        agent_to_update, self.device)  # todo 把auto写到decoder底下
 
         act_dis, logp_dis, act_con, logp_con = self.decoder.autoregressive_act(obs_rep, act_dis_infer, act_con_infer,
                                                                                agent_to_update)

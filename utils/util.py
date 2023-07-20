@@ -63,7 +63,7 @@ def map2real(raw_con, max_green):
     :param max_green:
     :return:
     """
-    return ((raw_con + 1) * max_green / 2).astype(np.int32)
+    return ((raw_con + 1) * (max_green - 1) / 2 + 1).astype(np.int32)
 
 
 def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, last_action_dis, last_action_con,
