@@ -213,7 +213,7 @@ class Decoder(nn.Module):
             x = block(x, obs_rep)
         var_con = self.head_con(x)
         means = self.fc_mean(var_con)  # (B, N, action_dim)
-        stds = torch.clamp(F.softplus(self.fc_std(var_con)), min=self.std_clip[0], max=self.std_clip[1])
+        stds = F.softplus(torch.clamp(self.fc_std(var_con), min=self.std_clip[0], max=self.std_clip[1]) - 1)
         return logits, means, stds
 
     def autoregressive_act(self, obs_rep, act_dis_infer, act_con_infer, agent_to_update):
@@ -229,6 +229,10 @@ class Decoder(nn.Module):
                     logit = logits[:, i]
                     mean = means[:, i]
                     std = stds[:, i]
+
+                    print('mean', mean)
+                    print('std', std)
+
                     agent_to_update_ = agent_to_update[:, i].bool()
 
                     dist_dis = Categorical(logits=logit)  # Batch discrete distributions
@@ -368,6 +372,8 @@ class MultiAgentTransformer(nn.Module):
         act_dis_infer = check(act_dis_infer).to(self.device)
         act_con_infer = check(act_con_infer).to(self.device)
         agent_to_update = check(agent_to_update).to(self.device)
+
+        print('obs', obs)
 
         with torch.no_grad():
             values, obs_rep = self.encoder(obs)

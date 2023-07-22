@@ -20,10 +20,10 @@ if __name__ == '__main__':
     parser.add_argument('--agent_num', type=int, default=20, help='Number of agents.')  # 代理数量
     parser.add_argument('--block_num', type=int, default=1, help='Number of transformer blocks.')  # Transformer块数量
     parser.add_argument('--head_num', type=int, default=8, help='Number of attention heads.')  # 注意力头数量
-    parser.add_argument('--std_clip', type=float, default=[0.1, 0.4], help='Standard deviation clip value.')  # 标准差剪裁值
+    parser.add_argument('--std_clip', type=float, default=[-1, 0.5], help='Standard deviation clip value.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--clip_ratio', type=float, default=0.2, help='Clip ratio.')
-    parser.add_argument('--batch_size', type=int, default=256, help='Batch size.')
+    parser.add_argument('--batch_size', type=int, default=512, help='Batch size.')
     parser.add_argument('--entropy_coef_dis', type=float, default=0.005, help='Entropy coefficient for discrete action.')
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
     parser.add_argument('--max_grad_norm', type=float, default=0.5, help='Maximum gradient norm.')
@@ -79,7 +79,7 @@ if __name__ == '__main__':
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 4800
+    max_episode_step = 4200
     max_sample_step = 600
     pattern = 'queue'
     env = gym.vector.AsyncVectorEnv([
@@ -118,6 +118,8 @@ if __name__ == '__main__':
 
         act_dis = None
         history_ptr = 0
+        queue = 0
+        episode_step = 0
 
         while True:
             # We only retrieve the queue information, and then push it into the observation history (for GRU).
@@ -144,13 +146,17 @@ if __name__ == '__main__':
 
             trunc = np.array([info['trunc'][i] for i in range(env_num)])
             termi = np.array([info['termi'][i] for i in range(env_num)])
-            # todo
+
+            queue += info['queue'].mean().sum()
+            episode_step += 1
+
             if trunc.all():
                 critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
                 trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
                 trainer.update()
             if termi.all():
                 print('---------------------------------------Test time: ', time.time() - test_st)
+                writer.add_scalar('episode_reward', queue / episode_step, episode)
                 break
 
         # update phase
