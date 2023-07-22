@@ -16,19 +16,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--obs_dim', type=int, default=8, help='Observation dimension.')  # 观测空间维度
     parser.add_argument('--action_dim', type=int, default=8, help='Action dimension.')  # 动作空间维度
-    parser.add_argument('--embd_dim', type=int, default=64, help='Embedding dimension.')  # 嵌入维度
+    parser.add_argument('--embd_dim', type=int, default=128, help='Embedding dimension.')  # 嵌入维度
     parser.add_argument('--agent_num', type=int, default=20, help='Number of agents.')  # 代理数量
     parser.add_argument('--block_num', type=int, default=1, help='Number of transformer blocks.')  # Transformer块数量
     parser.add_argument('--head_num', type=int, default=8, help='Number of attention heads.')  # 注意力头数量
-    parser.add_argument('--std_clip', type=float, default=[-1, 0.5], help='Standard deviation clip value.')  # 标准差剪裁值
+    parser.add_argument('--std_clip', type=float, default=[0.1, 0.3], help='Standard deviation clip value.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--clip_ratio', type=float, default=0.2, help='Clip ratio.')
     parser.add_argument('--batch_size', type=int, default=512, help='Batch size.')
     parser.add_argument('--entropy_coef_dis', type=float, default=0.005, help='Entropy coefficient for discrete action.')
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
-    parser.add_argument('--max_grad_norm', type=float, default=0.5, help='Maximum gradient norm.')
-    parser.add_argument('--target_kl_dis', type=float, default=0.025, help='Target KL divergence for discrete action.')
-    parser.add_argument('--target_kl_con', type=float, default=0.05, help='Target KL divergence for continuous action.')
+    parser.add_argument('--max_grad_norm', type=float, default=5, help='Maximum gradient norm.')
+    parser.add_argument('--target_kl_dis', type=float, default=0.05, help='Target KL divergence for discrete action.')
+    parser.add_argument('--target_kl_con', type=float, default=0.1, help='Target KL divergence for continuous action.')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')
     parser.add_argument('--lam', type=float, default=0.9, help='Lambda parameter for GAE.')
     parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs.')
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
     max_episode_step = 4200
-    max_sample_step = 600
+    max_sample_step = 500
     pattern = 'queue'
     env = gym.vector.AsyncVectorEnv([
         lambda i=i: gym.make('sumo-rl-v1',
@@ -134,14 +134,14 @@ if __name__ == '__main__':
 
             # Get action from the agent
             # st = time.time()
-            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=remap(act_con_infer, 40), agent_to_update=agent_to_update)
+            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=act_con_infer, agent_to_update=agent_to_update)
             # print('act time: ', time.time() - st)
             # Execute the environment and log data
-            action = {'duration': map2real(act_con, 40), 'stage': act_dis}
+            action = {'duration': act_con, 'stage': act_dis}
             # st = time.time()
             next_obs, reward, _, _, info = env.step(action)
             # print('env step time: ', time.time() - st)
-            trainer.buffer.store_trajectories(obs_rnn, act_dis_infer, remap(act_con_infer, 40), agent_to_update,
+            trainer.buffer.store_trajectories(obs_rnn, act_dis_infer, act_con_infer, agent_to_update,
                                               act_dis, act_con, logp_dis, logp_con, value, reward)
 
             trunc = np.array([info['trunc'][i] for i in range(env_num)])

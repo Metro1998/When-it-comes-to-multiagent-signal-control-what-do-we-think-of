@@ -46,24 +46,25 @@ def init(module, weight_init, bias_init, gain=1):
     return module
 
 
-def remap(time_remaining, max_green):
+def remap(time_remaining):
     """
     Remap the remaining time to its original range.
     :param time_remaining:
     :param max_green:
     :return:
     """
-    return (-1 + 2 * time_remaining / max_green).astype(np.float32)
+    return torch.atanh(2 * (time_remaining - 15) / (40 - 15) - 1)
 
 
-def map2real(raw_con, max_green):
+def map2real(raw_con):
     """
     Map the raw continuous parameter to the range of [0, max_green]
     :param raw_con:
+    :param min_green:
     :param max_green:
     :return:
     """
-    return ((raw_con + 1) * (max_green - 1) / 2 + 1).astype(np.int32)
+    return torch.round(15 + (raw_con + 1) * (40 - 15) / 2)
 
 
 def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, last_action_dis, last_action_con,

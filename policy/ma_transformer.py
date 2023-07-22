@@ -20,6 +20,12 @@ def init_(m, gain=0.01, activate=False):
     return init(m, nn.init.orthogonal_, lambda x: nn.init.constant_(x, 0), gain=gain)
 
 
+def init_aux_(m):
+    if isinstance(m, nn.Linear):
+        nn.init.orthogonal_(m.weight)
+        nn.init.zeros_(m.bias)
+
+
 class GRUs(nn.Module):
 
     def __init__(self, input_dim, hidden_dim, agent_num):
@@ -145,16 +151,19 @@ class Encoder(nn.Module):
 
         self.GRU = GRUs(obs_dim, obs_dim, agent_num)  # we use GRU to encode the observation sequence
 
-        self.obs_embedding = nn.Sequential(nn.LayerNorm(obs_dim),
-                                           init_(nn.Linear(obs_dim, embd_dim), activate=True), nn.GELU())
+        self.obs_embedding = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True),
+                                           nn.GELU())  # TODO run statistics
         self.ln = nn.LayerNorm(embd_dim)
         self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
 
         # There are agent_num heads, because we approximate state value of each agent separately.
-        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-                                  nn.LayerNorm(embd_dim),
-                                  init_(nn.Linear(embd_dim,
-                                                  1)))  # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
+        # self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
+        #                           nn.LayerNorm(embd_dim),
+        #                           init_(nn.Linear(embd_dim, 1)))
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
+                                  nn.GELU(),
+                                  init_(nn.Linear(embd_dim, 1)))
+        # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
 
     def forward(self, obs):
         """
@@ -162,7 +171,9 @@ class Encoder(nn.Module):
         :param obs: (B, N, seq_len, obs_dim)
         :return:
         """
-        obs = self.GRU(obs)  # (B, N, embd_dim)
+        # print(obs.shape)
+        # obs = self.GRU(obs)  # (B, N, embd_dim)
+        obs = obs[:, :, -1, :]  # (B, N, obs_dim)
         obs_embeddings = self.obs_embedding(obs)
         rep = self.blocks(self.ln(obs_embeddings))
         values = self.head(rep).squeeze()
@@ -192,10 +203,17 @@ class Decoder(nn.Module):
                                       init_(nn.Linear(embd_dim, action_dim)),
                                       nn.Softmax(dim=-1))
 
-        self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-                                      nn.LayerNorm(embd_dim))
-        self.fc_mean = init_(nn.Linear(embd_dim, action_dim))
-        self.fc_std = init_(nn.Linear(embd_dim, action_dim))
+        # self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
+        #                               nn.LayerNorm(embd_dim))
+        # self.fc_mean = init_(nn.Linear(embd_dim, action_dim))
+        # self.fc_std = init_(nn.Linear(embd_dim, action_dim))
+
+        self.fc_mean = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
+                                     nn.GELU(),
+                                     init_(nn.Linear(embd_dim, action_dim)))
+        self.fc_std = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
+                                    nn.GELU(),
+                                    init_(nn.Linear(embd_dim, action_dim)))
 
         self.std_clip = std_clip
 
@@ -211,9 +229,8 @@ class Decoder(nn.Module):
         x = action_embeddings
         for block in self.blocks_con:
             x = block(x, obs_rep)
-        var_con = self.head_con(x)
-        means = self.fc_mean(var_con)  # (B, N, action_dim)
-        stds = F.softplus(torch.clamp(self.fc_std(var_con), min=self.std_clip[0], max=self.std_clip[1]) - 1)
+        means = self.fc_mean(x)  # (B, N, action_dim)
+        stds = torch.clamp(F.softplus(self.fc_std(x) - 1.5), self.std_clip[0], self.std_clip[1])
         return logits, means, stds
 
     def autoregressive_act(self, obs_rep, act_dis_infer, act_con_infer, agent_to_update):
@@ -230,8 +247,9 @@ class Decoder(nn.Module):
                     mean = means[:, i]
                     std = stds[:, i]
 
-                    print('mean', mean)
-                    print('std', std)
+                    print('logit', logit[0])
+                    print('mean', mean[0])
+                    print('std', std[0])
 
                     agent_to_update_ = agent_to_update[:, i].bool()
 
@@ -241,13 +259,15 @@ class Decoder(nn.Module):
                     mean_ = torch.gather(mean, 1, act_dis_.unsqueeze(-1)).squeeze()
                     std_ = torch.gather(std, 1, act_dis_.unsqueeze(-1)).squeeze()
                     dist_con = Normal(mean_, std_)
-                    act_con_ = torch.where(agent_to_update_, torch.tanh(dist_con.sample()), act_con_infer[:, i])
+                    act_con_raw = dist_con.sample()
+                    act_con_ = torch.where(agent_to_update_, map2real(torch.tanh(act_con_raw)),
+                                           act_con_infer[:, i].float())
 
                     act_logp_dis = torch.where(agent_to_update_, dist_dis.log_prob(act_dis_),
                                                torch.zeros_like(act_dis_, dtype=torch.float32,
                                                                 device=torch.device('cpu')))
-                    act_logp_con = torch.where(agent_to_update_, dist_con.log_prob(act_con_),
-                                               torch.zeros_like(act_con_, dtype=torch.float32,
+                    act_logp_con = torch.where(agent_to_update_, dist_con.log_prob(act_con_raw),
+                                               torch.zeros_like(act_con_raw, dtype=torch.float32,
                                                                 device=torch.device('cpu')))
 
                     # act_logp_dis = dist_dis.log_prob(act_dis_)
@@ -256,7 +276,7 @@ class Decoder(nn.Module):
             # For agent_i in the batch, there is no one need to update
             else:
                 act_dis_ = act_dis_infer[:, i]
-                act_con_ = act_con_infer[:, i]
+                act_con_ = act_con_infer[:, i].float()
                 # Padding
                 act_logp_dis = torch.zeros_like(act_dis_, dtype=torch.float32, device=torch.device('cpu'))
                 act_logp_con = torch.zeros_like(act_con_, dtype=torch.float32, device=torch.device('cpu'))
@@ -277,11 +297,12 @@ class Decoder(nn.Module):
                 output_logp_con = torch.cat((output_logp_con, act_logp_con.unsqueeze(0)), dim=0)
 
         return torch.t(output_act_dis).numpy(), torch.t(output_logp_dis).numpy(), torch.t(
-            output_act_con).numpy(), torch.t(output_logp_con).numpy()
+            output_act_con).numpy().astype(np.int32), torch.t(output_logp_con).numpy()
 
     def parallel_act(self, obs_rep, act_dis_exec, act_con_exec, act_dis_infer, act_con_infer, agent_to_update):
 
-        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), device=torch.device('cuda'))
+        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2),
+                                    device=torch.device('cuda'))
         action_dis = torch.where(agent_to_update.bool(), act_dis_exec, act_dis_infer)
         action_con = torch.where(agent_to_update.bool(), act_con_exec, act_con_infer)
         hybrid_action[:, 0, 0] = 1
@@ -297,7 +318,8 @@ class Decoder(nn.Module):
         means = means.gather(-1, act_dis_.unsqueeze(-1)).squeeze()
         stds = stds.gather(-1, act_dis_.unsqueeze(-1)).squeeze()
         dist_con = Normal(means, stds)
-        act_con_ = torch.where(agent_to_update.bool(), act_con_exec, act_con_infer)
+        act_con_ = torch.where(agent_to_update.bool(), remap(act_con_exec),
+                               torch.zeros_like(act_con_infer, dtype=torch.float32, device=torch.device('cuda')))
         act_logp_con = dist_con.log_prob(act_con_)[agent_to_update == 1]
         entropy_con = dist_con.entropy()[agent_to_update == 1]
 
@@ -343,7 +365,9 @@ class MultiAgentTransformer(nn.Module):
         """
         _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con, act_dis_infer, act_con_infer, agent_to_update)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con,
+                                                                                       act_dis_infer, act_con_infer,
+                                                                                       agent_to_update)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -372,8 +396,6 @@ class MultiAgentTransformer(nn.Module):
         act_dis_infer = check(act_dis_infer).to(self.device)
         act_con_infer = check(act_con_infer).to(self.device)
         agent_to_update = check(agent_to_update).to(self.device)
-
-        print('obs', obs)
 
         with torch.no_grad():
             values, obs_rep = self.encoder(obs)
