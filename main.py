@@ -79,7 +79,7 @@ if __name__ == '__main__':
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 4200
+    max_episode_step = 500
     max_sample_step = 500
     pattern = 'queue'
     env = gym.vector.AsyncVectorEnv([
@@ -108,7 +108,8 @@ if __name__ == '__main__':
     #         break
     # print(cnt)
     # print('---------------------------------------Env step time: ', time.time() - st)
-
+    stat = np.zeros((5000, env_num, agent_num, obs_dim), dtype=np.float32)
+    mean, std = np.zeros(env_num, ), np.ones(env_num, )
     # """ TRAINING LOGIC """
     for episode in range(total_episodes):
         test_st = time.time()
@@ -117,6 +118,7 @@ if __name__ == '__main__':
         next_obs, info = env.reset()
 
         act_dis = None
+        stat_ptr = 0
         history_ptr = 0
         queue = 0
         episode_step = 0
@@ -124,8 +126,11 @@ if __name__ == '__main__':
         while True:
             # We only retrieve the queue information, and then push it into the observation history (for GRU).
             obs = np.reshape(next_obs['queue'], (env_num, agent_num, -1))
+            stat[stat_ptr] = obs
+            obs = np.array([(obs[i] - mean[i]) / np.maximum(std[i], 1e-8) for i in range(env_num)])
             obs_history[history_ptr + history_len - 1] = obs
             obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
+            stat_ptr += 1
             history_ptr += 1
 
             act_dis_infer = np.zeros((env_num, agent_num), dtype=np.int64) if act_dis is None else act_dis
@@ -150,13 +155,20 @@ if __name__ == '__main__':
             queue += info['queue'].mean().sum()
             episode_step += 1
 
-            if trunc.all():
-                critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
-                trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
-                trainer.update()
+            # if trunc.all():
+
             if termi.all():
-                print('---------------------------------------Test time: ', time.time() - test_st)
-                writer.add_scalar('episode_reward', queue / episode_step, episode)
+                mean, std = np.mean(stat[:stat_ptr], axis=(0, 2, 3)), np.std(stat[:stat_ptr], axis=(0, 2, 3))
+                print(mean, std, obs[0])
+                if episode == 0:
+                    trainer.buffer.clear()
+                    print('---------------------------------------Just for the statistics')
+                if episode >= 1:
+                    critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
+                    trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
+                    trainer.update()
+                    print('---------------------------------------Test time: ', time.time() - test_st)
+                    writer.add_scalar('episode_reward', queue / episode_step, episode)
                 break
 
         # update phase

@@ -151,17 +151,17 @@ class Encoder(nn.Module):
 
         self.GRU = GRUs(obs_dim, obs_dim, agent_num)  # we use GRU to encode the observation sequence
 
-        self.obs_embedding = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True),
-                                           nn.GELU())  # TODO run statistics
-        self.ln = nn.LayerNorm(embd_dim)
+        self.obs_embedding = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), gain=5 / 3),
+                                           nn.Tanh())  # TODO run statistics
+        self.ln = nn.LayerNorm(embd_dim)  # todo
         self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
 
         # There are agent_num heads, because we approximate state value of each agent separately.
         # self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
         #                           nn.LayerNorm(embd_dim),
         #                           init_(nn.Linear(embd_dim, 1)))
-        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
-                                  nn.GELU(),
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5 / 3),
+                                  nn.Tanh(),
                                   init_(nn.Linear(embd_dim, 1)))
         # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
 
@@ -190,47 +190,54 @@ class Decoder(nn.Module):
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
+        log_std = torch.zeros(action_dim) - 1.5
+        self.log_std = nn.Parameter(log_std)
+
         # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
         # and 1 indicates raw continuous parameter.
-        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
-                                              nn.GELU())
+        self.action_embedding_dis = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), gain=5 / 3),
+                                                  nn.Tanh())
+        self.action_embedding_con = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), gain=5 / 3),
+                                                  nn.Tanh())
         # self.ln = nn.LayerNorm(embd_dim)
         self.blocks_dis = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
         self.blocks_con = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
 
-        self.head_dis = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-                                      nn.LayerNorm(embd_dim),
+        self.head_dis = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5 / 3),
+                                      nn.Tanh(),
                                       init_(nn.Linear(embd_dim, action_dim)),
                                       nn.Softmax(dim=-1))
 
         # self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
         #                               nn.LayerNorm(embd_dim))
-        # self.fc_mean = init_(nn.Linear(embd_dim, action_dim))
+        # self.head_con = init_(nn.Linear(embd_dim, action_dim))
         # self.fc_std = init_(nn.Linear(embd_dim, action_dim))
 
-        self.fc_mean = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
-                                     nn.GELU(),
-                                     init_(nn.Linear(embd_dim, action_dim)))
-        self.fc_std = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
-                                    nn.GELU(),
-                                    init_(nn.Linear(embd_dim, action_dim)))
+        self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5 / 3),
+                                      nn.Tanh(),
+                                      init_(nn.Linear(embd_dim, action_dim)))
+        # self.fc_std = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5/3),
+        #                             nn.Tanh(),
+        #                             init_(nn.Linear(embd_dim, action_dim)))
 
         self.std_clip = std_clip
 
     def forward(self, hybrid_action, obs_rep):
         # x = self.ln(action_embeddings)
-        action_embeddings = self.action_embedding(hybrid_action)
 
-        x = action_embeddings
+        x = self.action_embedding_dis(hybrid_action)
         for block in self.blocks_dis:
             x = block(x, obs_rep)
         logits = self.head_dis(x)  # (B, N, action_dim)
 
-        x = action_embeddings
+        y = self.action_embedding_con(hybrid_action)
         for block in self.blocks_con:
-            x = block(x, obs_rep)
-        means = self.fc_mean(x)  # (B, N, action_dim)
-        stds = torch.clamp(F.softplus(self.fc_std(x) - 1.5), self.std_clip[0], self.std_clip[1])
+            y = block(y, obs_rep)
+        means = self.head_con(y)  # (B, N, action_dim)
+
+        B, N, _ = means.size()
+        stds = torch.clamp(F.softplus(self.log_std), self.std_clip[0], self.std_clip[1]).repeat(B, N, 1)
+
         return logits, means, stds
 
     def autoregressive_act(self, obs_rep, act_dis_infer, act_con_infer, agent_to_update):
@@ -247,9 +254,9 @@ class Decoder(nn.Module):
                     mean = means[:, i]
                     std = stds[:, i]
 
-                    print('logit', logit[0])
-                    print('mean', mean[0])
-                    print('std', std[0])
+                    # print('logit', logit[0])
+                    # print('mean', mean[0])
+                    # print('std', std[0])
 
                     agent_to_update_ = agent_to_update[:, i].bool()
 

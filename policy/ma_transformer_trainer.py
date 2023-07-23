@@ -40,21 +40,29 @@ class PPOTrainer:
         self.global_step = 0
 
         # args.adam_eps is set to be 1e-5, recommended by "The 37 Implementation Details of Proximal Policy Optimization"
-        self.parameters_con = [
-            {'params': self.policy_gpu.decoder.action_embedding.parameters()},
-            {'params': self.policy_gpu.decoder.blocks_con.parameters()},
-            {'params': self.policy_gpu.decoder.head_con.parameters()},
-            {'params': self.policy_gpu.decoder.fc_mean.parameters()},
-            {'params': self.policy_gpu.decoder.fc_std.parameters()}
-        ]
-        self.optimizer_actor_con = torch.optim.Adam(self.parameters_con, lr=args.lr_actor_con, eps=args.adam_eps)
-
-        self.parameters_dis = [
-            {'params': self.policy_gpu.decoder.action_embedding.parameters()},
-            {'params': self.policy_gpu.decoder.blocks_dis.parameters()},
-            {'params': self.policy_gpu.decoder.head_dis.parameters()}
-        ]
-        self.optimizer_actor_dis = torch.optim.Adam(self.parameters_dis, lr=args.lr_actor_con, eps=args.adam_eps)
+        # self.parameters_con = [
+        #     {'params': self.policy_gpu.decoder.action_embedding_con.parameters()},
+        #     {'params': self.policy_gpu.decoder.blocks_con.parameters()},
+        #     {'params': self.policy_gpu.decoder.head_con.parameters()},
+        #     {'params': self.policy_gpu.decoder.log_std}
+        # ]
+        self.optimizer_actor_con = torch.optim.Adam([
+            {'params': self.policy_gpu.decoder.action_embedding_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
+            {'params': self.policy_gpu.decoder.blocks_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
+            {'params': self.policy_gpu.decoder.head_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
+            {'params': self.policy_gpu.decoder.log_std, 'lr': args.lr_std, 'eps': args.adam_eps},
+        ])
+        self.optimizer_actor_dis = torch.optim.Adam([
+            {'params': self.policy_gpu.decoder.action_embedding_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps},
+            {'params': self.policy_gpu.decoder.blocks_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps},
+            {'params': self.policy_gpu.decoder.head_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps},
+        ])
+        # self.parameters_dis = [
+        #     {'params': self.policy_gpu.decoder.action_embedding_dis.parameters()},
+        #     {'params': self.policy_gpu.decoder.blocks_dis.parameters()},
+        #     {'params': self.policy_gpu.decoder.head_dis.parameters()}
+        # ]
+        # self.optimizer_actor_dis = torch.optim.Adam(self.parameters_dis, lr=args.lr_actor_con, eps=args.adam_eps)
 
         self.optimizer_critic = torch.optim.Adam(self.policy_gpu.encoder.parameters(), lr=args.lr_critic, eps=args.adam_eps)
 
@@ -121,8 +129,8 @@ class PPOTrainer:
                         approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
 
                     self.optimizer_actor_dis.zero_grad()
-                    loss_pi_dis.backward(retain_graph=True)
-                    [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_dis]
+                    loss_pi_dis.backward()
+                    # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_dis]
                     self.optimizer_actor_dis.step()
 
                 if update_con_actor:
@@ -142,7 +150,7 @@ class PPOTrainer:
 
                     self.optimizer_actor_con.zero_grad()
                     loss_pi_con.backward()
-                    [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_con]
+                    # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_con]
                     self.optimizer_actor_con.step()
 
                 self.writer.add_scalar('loss/critic', critic_loss, self.global_step)

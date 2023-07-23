@@ -53,7 +53,7 @@ def remap(time_remaining):
     :param max_green:
     :return:
     """
-    return torch.atanh(2 * (time_remaining - 15) / (40 - 15) - 1)
+    return torch.atanh(2 * (time_remaining - 10) / (30 - 10) - 1)
 
 
 def map2real(raw_con):
@@ -64,7 +64,7 @@ def map2real(raw_con):
     :param max_green:
     :return:
     """
-    return torch.round(15 + (raw_con + 1) * (40 - 15) / 2)
+    return torch.round(10 + (raw_con + 1) * (30 - 10) / 2)
 
 
 def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, last_action_dis, last_action_con,

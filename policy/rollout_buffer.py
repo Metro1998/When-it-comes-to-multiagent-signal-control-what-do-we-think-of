@@ -141,3 +141,6 @@ class PPOBuffer:
             k: torch.as_tensor(v, dtype=torch.int64, device=torch.device('cuda')) if k in ['act_dis', 'act_dis_infer', 'agent']
             else torch.as_tensor(v, dtype=torch.float32, device=torch.device('cuda')) for k, v in data.items()
         }
+
+    def clear(self):
+        self.path_start_idx, self.ptr = 0, 0
