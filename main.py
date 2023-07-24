@@ -79,7 +79,7 @@ if __name__ == '__main__':
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 1800
+    max_episode_step = 800
     max_sample_step = 10000
     pattern = 'queue'
     env = gym.vector.AsyncVectorEnv([
@@ -108,7 +108,10 @@ if __name__ == '__main__':
     #         break
     # print(cnt)
     # print('---------------------------------------Env step time: ', time.time() - st)
-    stat = np.zeros((5000, env_num, agent_num, obs_dim), dtype=np.float32)
+    stat = np.zeros((5, 5000, env_num, agent_num, obs_dim), dtype=np.float32)
+    roll_win = 0
+    stat_ptrs = np.zeros(5, dtype=np.int32)
+
     mean, std = np.zeros(env_num, ), np.ones(env_num, )
     # """ TRAINING LOGIC """
     for episode in range(total_episodes):
@@ -126,7 +129,7 @@ if __name__ == '__main__':
         while True:
             # We only retrieve the queue information, and then push it into the observation history (for GRU).
             obs = np.reshape(next_obs['queue'], (env_num, agent_num, -1))
-            stat[stat_ptr] = obs
+            stat[roll_win][stat_ptr] = obs
             obs = np.array([(obs[i] - mean[i]) / np.maximum(std[i], 1e-8) for i in range(env_num)])
             obs_history[history_ptr + history_len - 1] = obs
             obs_rnn = obs_history[history_ptr: history_ptr + history_len].transpose((1, 2, 0, 3))
@@ -158,12 +161,15 @@ if __name__ == '__main__':
             # if trunc.all():
 
             if termi.all():
-                mean, std = np.mean(stat[:stat_ptr], axis=(0, 2, 3)), np.std(stat[:stat_ptr], axis=(0, 2, 3))
-                print(mean, std, obs[0])
-                if episode == 0:
+                stat_ptrs[roll_win] = stat_ptr
+                mean, std = run_stat(stat, stat_ptrs)
+                print(mean, std)
+                roll_win = (roll_win + 1) % 5
+                # mean, std = np.mean(stat[:stat_ptr], axis=(0, 2, 3)), np.std(stat[:stat_ptr], axis=(0, 2, 3))
+                if episode <= 1:
                     trainer.buffer.clear()
                     print('---------------------------------------Just for the statistics')
-                if episode >= 1:
+                else:
                     critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
                     trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
                     trainer.update()

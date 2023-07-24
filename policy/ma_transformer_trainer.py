@@ -75,7 +75,6 @@ class PPOTrainer:
 
         sample_dic = self.buffer.get()
         total_len = sample_dic['obs'].size()[0]
-        update_dis_actor, update_con_actor = 1, 1
 
         for _ in range(self.epochs):
             # Recompute values at the beginning of each epoch
@@ -87,6 +86,7 @@ class PPOTrainer:
                 drop_last=True))
             for indices in sampler:
                 obs_batch = sample_dic['obs'][indices]
+                print(obs_batch)
                 agent_batch = sample_dic['agent'][indices]
                 act_dis_batch = sample_dic['act_dis'][indices]
                 act_con_batch = sample_dic['act_con'][indices]
@@ -114,40 +114,43 @@ class PPOTrainer:
                 new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy_gpu.evaluate_actions(
                     obs_batch, act_dis_batch, act_con_batch, agent_batch)
 
-                if update_dis_actor:
-                    ## Calculate the gradient of discrete actor ##
-                    imp_weights = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
-                    surr1 = imp_weights * joint_adv_batch
-                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
-                    loss_pi_dis = - (torch.min(surr1, surr2) + self.entropy_coef_dis * entropy_dis).mean()
+                self.optimizer_actor_dis.zero_grad()
+                self.optimizer_actor_con.zero_grad()
+                ## Calculate the gradient of discrete actor ##
+                imp_weights = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
+                surr1 = imp_weights * joint_adv_batch
+                surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
+                loss_pi_dis = - (torch.min(surr1, surr2) + self.entropy_coef_dis * entropy_dis).mean()
 
-                    with torch.no_grad():
-                        # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
-                        approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
+                with torch.no_grad():
+                    # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
 
-                    self.optimizer_actor_dis.zero_grad()
-                    self.optimizer_actor_con.zero_grad()
+                if approx_kl_dis > self.target_kl_dis:
+                    print('Early stopping at step {} due to reaching max kl. Now approx_kl_dis is {}'.format(self.global_step, approx_kl_dis))
+                else:
                     loss_pi_dis.backward(retain_graph=True)
                     # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_dis]
                     self.optimizer_actor_dis.step()
 
-                if update_con_actor:
-                    ## Calculate the gradient of continuous actor ##
+                self.optimizer_actor_dis.zero_grad()
+                self.optimizer_actor_con.zero_grad()
 
-                    imp_weights = torch.exp(new_logp_con_batch - old_logp_con_batch)
-                    surr1 = imp_weights * joint_adv_batch
-                    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
+                imp_weights = torch.exp(new_logp_con_batch - old_logp_con_batch)
+                surr1 = imp_weights * joint_adv_batch
+                surr2 = torch.clamp(imp_weights, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
 
-                    # Andrychowicz, et al. (2021) overall find no evidence that the entropy term improves performance on
-                    # continuous control environments.
-                    loss_pi_con = - torch.min(surr1, surr2).mean()
+                # Andrychowicz, et al. (2021) overall find no evidence that the entropy term improves performance on
+                # continuous control environments.
+                loss_pi_con = - torch.min(surr1, surr2).mean()
 
-                    with torch.no_grad():
-                        # calculate approx_kl http://joschu.net/blog/kl-approx.html
-                        approx_kl_con = ((imp_weights - 1) - (new_logp_con_batch - old_logp_con_batch)).mean()
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    approx_kl_con = ((imp_weights - 1) - (new_logp_con_batch - old_logp_con_batch)).mean()
 
-                    self.optimizer_actor_dis.zero_grad()
-                    self.optimizer_actor_con.zero_grad()
+                if approx_kl_con > self.target_kl_con:
+                    print('Early stopping at step {} due to reaching max kl. Now approx_kl_con is {}'.format(self.global_step, approx_kl_con))
+                else:
                     loss_pi_con.backward()
                     # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_con]
                     self.optimizer_actor_con.step()
@@ -159,14 +162,9 @@ class PPOTrainer:
                 self.writer.flush()
                 self.global_step += 1
 
-            if approx_kl_dis > self.target_kl_dis:
-                update_dis_actor = 0
-            if approx_kl_con > self.target_kl_con:
-                update_con_actor = 0
-
-        self.lr_scheduler_actor_con.step()
-        self.lr_scheduler_actor_dis.step()
-        self.lr_scheduler_critic.step()
+        # self.lr_scheduler_actor_con.step()
+        # self.lr_scheduler_actor_dis.step()
+        # self.lr_scheduler_critic.step()
         self.copy_parameter()
 
     # def recompute(self, observation, reward, end_idx):
