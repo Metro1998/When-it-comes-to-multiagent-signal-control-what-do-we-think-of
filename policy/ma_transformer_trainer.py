@@ -23,7 +23,7 @@ class PPOTrainer:
         self.policy_gpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, device='cuda:0')
         self.policy_cpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, device='cpu')
         self.copy_parameter()
-        self.buffer = PPOBuffer(2000, args.env_num, args.agent_num, args.obs_dim, args.history_len, args.gamma, args.lam)
+        self.buffer = PPOBuffer(3600, args.env_num, args.agent_num, args.obs_dim, args.history_len, args.gamma, args.lam)
         self.random_seed = args.random_seed
         self.agent_num = args.agent_num
         self.clip_ratio = args.clip_ratio
@@ -88,8 +88,6 @@ class PPOTrainer:
             for indices in sampler:
                 obs_batch = sample_dic['obs'][indices]
                 agent_batch = sample_dic['agent'][indices]
-                act_dis_infer_batch = sample_dic['act_dis_infer'][indices]
-                act_con_infer_batch = sample_dic['act_con_infer'][indices]
                 act_dis_batch = sample_dic['act_dis'][indices]
                 act_con_batch = sample_dic['act_con'][indices]
                 old_logp_dis_batch = sample_dic['logp_dis'][indices][agent_batch == 1]
@@ -109,13 +107,12 @@ class PPOTrainer:
                 critic_loss = self.loss_func(predicted_values, ret_batch)
                 self.optimizer_critic.zero_grad()
                 critic_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.policy_gpu.encoder.parameters(), norm_type=2,
-                                               max_norm=self.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.policy_gpu.encoder.parameters(), norm_type=2, max_norm=self.max_grad_norm)
                 self.optimizer_critic.step()
 
                 ### Update decoders ###
                 new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy_gpu.evaluate_actions(
-                    obs_batch, act_dis_batch, act_con_batch, act_dis_infer_batch, act_con_infer_batch, agent_batch)
+                    obs_batch, act_dis_batch, act_con_batch, agent_batch)
 
                 if update_dis_actor:
                     ## Calculate the gradient of discrete actor ##
@@ -129,7 +126,8 @@ class PPOTrainer:
                         approx_kl_dis = ((imp_weights - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
 
                     self.optimizer_actor_dis.zero_grad()
-                    loss_pi_dis.backward()
+                    self.optimizer_actor_con.zero_grad()
+                    loss_pi_dis.backward(retain_graph=True)
                     # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_dis]
                     self.optimizer_actor_dis.step()
 
@@ -148,6 +146,7 @@ class PPOTrainer:
                         # calculate approx_kl http://joschu.net/blog/kl-approx.html
                         approx_kl_con = ((imp_weights - 1) - (new_logp_con_batch - old_logp_con_batch)).mean()
 
+                    self.optimizer_actor_dis.zero_grad()
                     self.optimizer_actor_con.zero_grad()
                     loss_pi_con.backward()
                     # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_con]
@@ -165,6 +164,9 @@ class PPOTrainer:
             if approx_kl_con > self.target_kl_con:
                 update_con_actor = 0
 
+        self.lr_scheduler_actor_con.step()
+        self.lr_scheduler_actor_dis.step()
+        self.lr_scheduler_critic.step()
         self.copy_parameter()
 
     # def recompute(self, observation, reward, end_idx):

@@ -64,7 +64,7 @@ def map2real(raw_con):
     :param max_green:
     :return:
     """
-    return torch.round(10 + (raw_con + 1) * (30 - 10) / 2)
+    return 10 + (raw_con + 1) * (30 - 10) / 2
 
 
 def autoregressive_act(decoder, obs_rep, batch_size, agent_num, action_dim, last_action_dis, last_action_con,

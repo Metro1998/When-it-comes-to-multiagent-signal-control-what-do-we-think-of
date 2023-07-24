@@ -27,16 +27,16 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_coef_dis', type=float, default=0.005, help='Entropy coefficient for discrete action.')
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
     parser.add_argument('--max_grad_norm', type=float, default=5, help='Maximum gradient norm.')
-    parser.add_argument('--target_kl_dis', type=float, default=0.05, help='Target KL divergence for discrete action.')
-    parser.add_argument('--target_kl_con', type=float, default=0.1, help='Target KL divergence for continuous action.')
+    parser.add_argument('--target_kl_dis', type=float, default=0.025, help='Target KL divergence for discrete action.')
+    parser.add_argument('--target_kl_con', type=float, default=0.05, help='Target KL divergence for continuous action.')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')
     parser.add_argument('--lam', type=float, default=0.9, help='Lambda parameter for GAE.')
-    parser.add_argument('--epochs', type=int, default=40, help='Number of training epochs.')
+    parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs.')
     parser.add_argument('--comment', type=str, default='_test', help='Comment for tensorboard.')
 
     # 添加Adam优化器参数
     parser.add_argument('--lr_actor_con', type=float, default=0.0003, help='Learning rate for continuous actor.')
-    parser.add_argument('--lr_std', type=float, default=0.02, help='Learning rate for std deviation.')
+    parser.add_argument('--lr_std', type=float, default=0.005, help='Learning rate for std deviation.')
     parser.add_argument('--lr_actor_dis', type=float, default=0.0003, help='Learning rate for discrete actor.')
     parser.add_argument('--adam_eps', type=float, default=1e-5, help='Epsilon value for Adam optimizer.')
     parser.add_argument('--lr_decay_rate', type=float, default=0.005, help='Learning rate decay rate.')
@@ -79,8 +79,8 @@ if __name__ == '__main__':
     local_net_file = 'envs/roadnet.net.xml'
     local_route_file = 'envs/roadnet.rou.xml'
     local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 500
-    max_sample_step = 500
+    max_episode_step = 1800
+    max_sample_step = 10000
     pattern = 'queue'
     env = gym.vector.AsyncVectorEnv([
         lambda i=i: gym.make('sumo-rl-v1',
@@ -142,11 +142,11 @@ if __name__ == '__main__':
             act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=act_con_infer, agent_to_update=agent_to_update)
             # print('act time: ', time.time() - st)
             # Execute the environment and log data
-            action = {'duration': act_con, 'stage': act_dis}
+            action = {'duration': np.around(act_con).astype(np.int32), 'stage': act_dis}
             # st = time.time()
             next_obs, reward, _, _, info = env.step(action)
             # print('env step time: ', time.time() - st)
-            trainer.buffer.store_trajectories(obs_rnn, act_dis_infer, act_con_infer, agent_to_update,
+            trainer.buffer.store_trajectories(obs_rnn, agent_to_update,
                                               act_dis, act_con, logp_dis, logp_con, value, reward)
 
             trunc = np.array([info['trunc'][i] for i in range(env_num)])

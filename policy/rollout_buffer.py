@@ -30,8 +30,6 @@ class PPOBuffer:
         self.ret_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.act_con_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.act_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
-        self.act_con_infer_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
-        self.act_dis_infer_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
         self.logp_con_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.logp_dis_buf = np.zeros((num_steps, num_envs, num_agents), dtype=np.float32)
         self.agent_to_update = np.zeros((num_steps, num_envs, num_agents), dtype=np.int64)
@@ -92,21 +90,20 @@ class PPOBuffer:
                     val_tra = np.insert(value_[i][j][val_idx], 0, value_[i][j][k])
                     delta = rew_tra + self.gamma * val_tra[1:] - val_tra[:-1]
                     self.adv_buf[self.path_start_idx + k][i][j] = discount_cumsum(delta, self.gamma * self.lam)[0]
-                    self.ret_buf[self.path_start_idx + k][i][j] = self.adv_buf[self.path_start_idx + k][i][j] + \
-                                                                  value_[i][j][k]
+                    # self.ret_buf[self.path_start_idx + k][i][j] = self.adv_buf[self.path_start_idx + k][i][j] + \
+                    #                                               value_[i][j][k]
+                    self.ret_buf[self.path_start_idx + k][i][j] = discount_cumsum(rew_tra, self.gamma)[0]
         print('SUCCESS!')
         self.path_start_idx += end_idx
         self.ptr = self.path_start_idx
 
-    def store_trajectories(self, obs, act_dis_infer, act_con_infer, agent_to_update, act_dis, act_con, logp_dis, logp_con, val, rew):
+    def store_trajectories(self, obs, agent_to_update, act_dis, act_con, logp_dis, logp_con, val, rew):
         """
 `       Append one timestep of agent-environment interaction to the buffer.
         ### Inputs are batch of num_envs * num_agents ###
         """
         assert self.ptr < self.max_size
         self.obs_buf[self.ptr] = obs
-        self.act_dis_infer_buf[self.ptr] = act_dis_infer
-        self.act_con_infer_buf[self.ptr] = act_con_infer
         self.agent_to_update[self.ptr] = agent_to_update
         self.act_dis_buf[self.ptr] = act_dis
         self.act_con_buf[self.ptr] = act_con
@@ -124,8 +121,6 @@ class PPOBuffer:
         """
         data = dict(
             obs=self.obs_buf[:self.ptr].reshape(-1, self.num_agents, self.len_his, self.obs_dim),
-            act_dis_infer=self.act_dis_infer_buf[:self.ptr].reshape(-1, self.num_agents),
-            act_con_infer=self.act_con_infer_buf[:self.ptr].reshape(-1, self.num_agents),
             act_dis=self.act_dis_buf[:self.ptr].reshape(-1, self.num_agents),
             act_con=self.act_con_buf[:self.ptr].reshape(-1, self.num_agents),
             logp_dis=self.logp_dis_buf[:self.ptr].reshape(-1, self.num_agents),
