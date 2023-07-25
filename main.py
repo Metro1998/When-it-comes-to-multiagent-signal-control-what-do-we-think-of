@@ -18,7 +18,7 @@ if __name__ == '__main__':
     parser.add_argument('--action_dim', type=int, default=8, help='Action dimension.')  # 动作空间维度
     parser.add_argument('--embd_dim', type=int, default=128, help='Embedding dimension.')  # 嵌入维度
     parser.add_argument('--agent_num', type=int, default=20, help='Number of agents.')  # 代理数量
-    parser.add_argument('--block_num', type=int, default=1, help='Number of transformer blocks.')  # Transformer块数量
+    parser.add_argument('--block_num', type=int, default=2, help='Number of transformer blocks.')  # Transformer块数量
     parser.add_argument('--head_num', type=int, default=8, help='Number of attention heads.')  # 注意力头数量
     parser.add_argument('--std_clip', type=float, default=[0.1, 0.3], help='Standard deviation clip value.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
@@ -28,10 +28,10 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
     parser.add_argument('--max_grad_norm', type=float, default=5, help='Maximum gradient norm.')
     parser.add_argument('--target_kl_dis', type=float, default=0.025, help='Target KL divergence for discrete action.')
-    parser.add_argument('--target_kl_con', type=float, default=0.05, help='Target KL divergence for continuous action.')
+    parser.add_argument('--target_kl_con', type=float, default=0.075, help='Target KL divergence for continuous action.')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')
     parser.add_argument('--lam', type=float, default=0.9, help='Lambda parameter for GAE.')
-    parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs.')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs.')
     parser.add_argument('--comment', type=str, default='_test', help='Comment for tensorboard.')
 
     # 添加Adam优化器参数

@@ -238,6 +238,7 @@ class Decoder(nn.Module):
 
         B, N, _ = means.size()
         stds = torch.clamp(F.softplus(self.log_std), self.std_clip[0], self.std_clip[1]).repeat(B, N, 1)
+        print('stds', stds)
 
         return logits, means, stds
 
@@ -307,7 +308,7 @@ class Decoder(nn.Module):
         return torch.t(output_act_dis).numpy(), torch.t(output_logp_dis).numpy(), torch.t(
             output_act_con).numpy(), torch.t(output_logp_con).numpy()
 
-    def parallel_act_dis(self, obs_rep, act_dis_exec, act_con_exec, agent_to_update):
+    def parallel_act(self, obs_rep, act_dis_exec, act_con_exec, agent_to_update):
         hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), device=torch.device('cuda'))
         hybrid_action[:, 0, 0] = 1
         hybrid_action[:, 1:, 1:-1].copy_(F.one_hot(act_dis_exec, num_classes=self.action_dim)[:, :-1, :])
@@ -318,24 +319,15 @@ class Decoder(nn.Module):
         act_logp_dis = dist_dis.log_prob(act_dis_exec)[agent_to_update == 1]
         entropy_dis = dist_dis.entropy()[agent_to_update == 1]  # todo fix
 
-        return act_logp_dis, entropy_dis
-
-    def parallel_act_con(self, obs_rep, act_dis_exec, act_con_exec, agent_to_update):
-        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), device=torch.device('cuda'))
-        hybrid_action[:, 0, 0] = 1
-        hybrid_action[:, 1:, 1:-1].copy_(F.one_hot(act_dis_exec, num_classes=self.action_dim)[:, :-1, :])
-        hybrid_action[:, 1:, -1] = act_con_exec[:, :-1]
-        logits, means, stds = self.forward(hybrid_action, obs_rep)
-
         means = means.gather(-1, act_dis_exec.unsqueeze(-1)).squeeze()
         stds = stds.gather(-1, act_dis_exec.unsqueeze(-1)).squeeze()
         dist_con = Normal(means, stds)
-        act_con_ = torch.where(agent_to_update.bool(), remap(act_con_exec), torch.zeros_like(act_con_exec, dtype=torch.float32, device=torch.device('cuda')))
+        act_con_ = torch.where(agent_to_update.bool(), remap(act_con_exec),
+                               torch.zeros_like(act_con_exec, dtype=torch.float32, device=torch.device('cuda')))
         act_logp_con = dist_con.log_prob(act_con_)[agent_to_update == 1]
         entropy_con = dist_con.entropy()[agent_to_update == 1]
-        # entropy_con = dist_con.entropy()
 
-        return act_logp_con, entropy_con
+        return act_logp_dis, entropy_dis, act_logp_con, entropy_con
 
 
 class MultiAgentTransformer(nn.Module):
@@ -377,8 +369,7 @@ class MultiAgentTransformer(nn.Module):
         """
         _, obs_rep = self.encoder(obs)
 
-        act_log_dis, entropy_dis = self.decoder.parallel_act_dis(obs_rep, act_dis, act_con, agent_to_update)
-        act_log_con, entropy_con = self.decoder.parallel_act_con(obs_rep, act_dis, act_con, agent_to_update)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con, agent_to_update)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
