@@ -148,13 +148,22 @@ class DecodeBlock(nn.Module):
 class Encoder(nn.Module):
 
     def __init__(self, obs_dim, embd_dim, block_num, head_num, agent_num, dropout=0.1):
+        """
+        Encoder (critic) to approximate the value function
+        :param obs_dim:
+        :param embd_dim:
+        :param block_num:
+        :param head_num:
+        :param agent_num:
+        :param dropout:
+        """
         super(Encoder, self).__init__()
 
         self.obs_dim = obs_dim
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
-        self.GRU = GRUs(obs_dim, obs_dim, agent_num)  # we use GRU to encode the observation sequence
+        self.GRU = GRUs(obs_dim, embd_dim, agent_num)  # we use GRU to encode the observation sequence
 
         self.obs_encoder = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True),
                                          nn.GELU())
@@ -181,50 +190,76 @@ class Encoder(nn.Module):
         return values, rep
 
 
-class Decoder_dis(nn.Module):
+class Encoder_Decoder_dis(nn.Module):
 
-    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, dropout=0.1):
-        super(Decoder_dis, self).__init__()
+    def __init__(self, action_dim, obs_dim, embd_dim, block_num, head_num, agent_num, dropout=0.1):
+        """
+        Like H-PPO we have separated the perception part of the critic and the actor,
+        which means the actor has its own encoder.
+        :param action_dim:
+        :param obs_dim:
+        :param embd_dim:
+        :param block_num:
+        :param head_num:
+        :param agent_num:
+        :param dropout:
+        """
+        super(Encoder_Decoder_dis, self).__init__()
 
         self.action_dim = action_dim
+        self.obs_dim = obs_dim
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
+        self.GRU = GRUs(obs_dim, embd_dim, agent_num)  # we use GRU to encode the observation sequence
+
+        self.obs_embedding = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True),
+                                           nn.GELU())
+        self.ln1 = nn.LayerNorm(embd_dim)
+        self.blocks_enc = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+
         self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
                                               nn.GELU())
-        self.ln = nn.LayerNorm(embd_dim)
-        self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+        self.ln2 = nn.LayerNorm(embd_dim)
+        self.blocks_dec = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
         self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
                                   nn.GELU(),
                                   nn.LayerNorm(embd_dim),
                                   init_(nn.Linear(embd_dim, action_dim)),
                                   nn.Softmax(dim=-1))
 
-    def forward(self, hybrid_action, obs_rep):
+    def forward(self, obs, hybrid_action):
+
+        obs = obs[:, :, -1, :]  # (B, N, obs_dim) gru is temporally deprecated
+        obs_embeddings = self.obs_embedding(obs)
+        obs_rep = self.blocks_enc(self.ln1(obs_embeddings))
+
         action_embeddings = self.action_embedding(hybrid_action)
-        x = self.ln(action_embeddings)
-        for block in self.blocks:
+        x = self.ln2(action_embeddings)
+        for block in self.blocks_dec:
             x = block(x, obs_rep)
         logits = self.head(x)  # (B, N, action_dim)
 
         return logits
 
 
-class Decoder_con(nn.Module):
+class Encoder_Decoder_con(nn.Module):
 
-    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, std_clips, dropout=0.1):
+    def __init__(self, action_dim, obs_dim, embd_dim, block_num, head_num, agent_num, std_clips, dropout=0.1):
         """
 
         :param action_dim:
+        :param obs_dim:
         :param embd_dim:
         :param block_num:
         :param head_num:
         :param agent_num:
         :param std_clips: the clipping range of std
         """
-        super(Decoder_con, self).__init__()
+        super(Encoder_Decoder_con, self).__init__()
 
         self.action_dim = action_dim
+        self.obs_dim = obs_dim
         self.embd_dim = embd_dim
         self.agent_num = agent_num
         self.std_clips = std_clips
@@ -232,20 +267,29 @@ class Decoder_con(nn.Module):
         log_std = torch.zeros(action_dim) - 1.5
         self.log_std = nn.Parameter(log_std, requires_grad=True)
 
+        self.obs_embedding = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True),
+                                           nn.GELU())
+        self.ln1 = nn.LayerNorm(embd_dim)
+        self.blocks_enc = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+
         self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
                                               nn.GELU())
-        self.ln = nn.LayerNorm(embd_dim)
-        self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+        self.ln2 = nn.LayerNorm(embd_dim)
+        self.blocks_dec = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
         self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
                                   nn.GELU(),
                                   nn.LayerNorm(embd_dim),
                                   init_(nn.Linear(embd_dim, action_dim)))
 
-    def forward(self, hybrid_action, obs_rep):
+    def forward(self, obs, hybrid_action):
+
+        obs = obs[:, :, -1, :]  # (B, N, obs_dim) gru is temporally deprecated
+        obs_embeddings = self.obs_embedding(obs)
+        obs_rep = self.blocks_enc(self.ln1(obs_embeddings))
 
         action_embeddings = self.action_embedding(hybrid_action)
-        x = self.ln(action_embeddings)
-        for block in self.blocks:
+        x = self.ln2(action_embeddings)
+        for block in self.blocks_dec:
             x = block(x, obs_rep)
         means = self.head(x)  # (B, N, action_dim)
         stds = torch.clamp(F.softplus(self.log_std), self.std_clips[0], self.std_clips[1]).repeat(means.shape[0], means.shape[1], 1)
@@ -277,8 +321,8 @@ class MultiAgentTransformer(nn.Module):
         # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
         # each other, so are they in MAT.
         self.encoder = Encoder(obs_dim, embd_dim, block_num, head_num, agent_num, dropout)
-        self.decoder_con = Decoder_con(action_dim, embd_dim, block_num, head_num, agent_num, std_clip, dropout)
-        self.decoder_dis = Decoder_dis(action_dim, embd_dim, block_num, head_num, agent_num, dropout)
+        self.decoder_con = Encoder_Decoder_con(action_dim, obs_dim, embd_dim, block_num, head_num, agent_num, std_clip, dropout)
+        self.decoder_dis = Encoder_Decoder_dis(action_dim, obs_dim, embd_dim, block_num, head_num, agent_num, dropout)
         self.mapping = mapping(min_green=10, max_green=30)
 
         self.to(self.device)
@@ -295,9 +339,7 @@ class MultiAgentTransformer(nn.Module):
         :param agent_to_update:
         :return:
         """
-        _, obs_rep = self.encoder(obs)
-
-        act_log_dis, entropy_dis, act_log_con, entropy_con = self.parallel_act(obs_rep, act_dis, act_con, agent_to_update, target_decoder_dis, target_decoder_con)
+        act_log_dis, entropy_dis, act_log_con, entropy_con = self.parallel_act(obs, act_dis, act_con, agent_to_update, target_decoder_dis, target_decoder_con)
 
         return act_log_dis, entropy_dis, act_log_con, entropy_con
 
@@ -328,14 +370,13 @@ class MultiAgentTransformer(nn.Module):
         agent_to_update = check(agent_to_update).to(self.device)
 
         with torch.no_grad():
-            values, obs_rep = self.encoder(obs)
-
-        act_dis, logp_dis, act_con, logp_con = self.autoregressive_act(obs_rep, act_dis_infer, act_con_infer, agent_to_update)
+            values, _ = self.encoder(obs)
+            act_dis, logp_dis, act_con, logp_con = self.autoregressive_act(obs, act_dis_infer, act_con_infer, agent_to_update)
 
         return act_dis, logp_dis, act_con, logp_con, values
 
-    def autoregressive_act(self, obs_rep, act_dis_infer, act_con_infer, agent_to_update):
-        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), dtype=torch.float32,
+    def autoregressive_act(self, obs, act_dis_infer, act_con_infer, agent_to_update):
+        hybrid_action = torch.zeros((obs.shape[0], self.agent_num, self.action_dim + 2), dtype=torch.float32,
                                     device=torch.device('cpu'))
         hybrid_action[:, 0, 0] = 1
         for i in range(self.agent_num):
@@ -343,8 +384,8 @@ class MultiAgentTransformer(nn.Module):
             # For agent_i in the batch, there is at least one to update
             if agent_to_update[:, i].sum() > 0:
                 with torch.no_grad():
-                    logits = self.decoder_dis.forward(hybrid_action, obs_rep)
-                    means, stds = self.decoder_con.forward(hybrid_action, obs_rep)
+                    logits = self.decoder_dis.forward(obs, hybrid_action)
+                    means, stds = self.decoder_con.forward(obs, hybrid_action)
                     logit = logits[:, i]
                     mean = means[:, i]
                     std = stds[:, i]
@@ -361,15 +402,10 @@ class MultiAgentTransformer(nn.Module):
                     act_con_ = torch.where(agent_to_update_, self.mapping.norm(self.mapping.map2real(torch.tanh(act_con_raw))),
                                            act_con_infer[:, i].float())
 
-                    act_logp_dis = torch.where(agent_to_update_, dist_dis.log_prob(act_dis_),
-                                               torch.zeros_like(act_dis_, dtype=torch.float32,
-                                                                device=torch.device('cpu')))
-                    act_logp_con = torch.where(agent_to_update_, dist_con.log_prob(act_con_raw),
-                                               torch.zeros_like(act_con_raw, dtype=torch.float32,
-                                                                device=torch.device('cpu')))
-
-                    # act_logp_dis = dist_dis.log_prob(act_dis_)
-                    # act_logp_con = dist_con.log_prob(act_con_)
+                    act_logp_dis = torch.where(agent_to_update_, dist_dis.log_prob(act_dis_), torch.zeros_like(act_dis_,
+                                               dtype=torch.float32, device=torch.device('cpu')))
+                    act_logp_con = torch.where(agent_to_update_, dist_con.log_prob(act_con_raw), torch.zeros_like(act_con_raw,
+                                               dtype=torch.float32, device=torch.device('cpu')))
 
             # For agent_i in the batch, there is no one need to update
             else:
@@ -397,20 +433,20 @@ class MultiAgentTransformer(nn.Module):
         return torch.t(output_act_dis).numpy(), torch.t(output_logp_dis).numpy(), torch.t(
             output_act_con).numpy(), torch.t(output_logp_con).numpy()
 
-    def parallel_act(self, obs_rep, act_dis_exec, act_con_exec, agent_to_update, target_decoder_dis=None, target_decoder_con=None):
-        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2),
+    def parallel_act(self, obs, act_dis_exec, act_con_exec, agent_to_update, target_decoder_dis=None, target_decoder_con=None):
+        hybrid_action = torch.zeros((obs.shape[0], self.agent_num, self.action_dim + 2),
                                     device=torch.device('cuda'))
         hybrid_action[:, 0, 0] = 1
         hybrid_action[:, 1:, 1:-1].copy_(F.one_hot(act_dis_exec, num_classes=self.action_dim)[:, :-1, :])
         hybrid_action[:, 1:, -1] = act_con_exec[:, :-1]
         if target_decoder_dis is None:
-            logits = self.decoder_dis.forward(hybrid_action, obs_rep)
+            logits = self.decoder_dis.forward(obs, hybrid_action)
         else:
-            logits = target_decoder_dis.forward(hybrid_action, obs_rep)
+            logits = target_decoder_dis.forward(obs, hybrid_action)
         if target_decoder_con is None:
-            means, stds = self.decoder_con.forward(hybrid_action, obs_rep)
+            means, stds = self.decoder_con.forward(obs, hybrid_action)
         else:
-            means, stds = target_decoder_con.forward(hybrid_action, obs_rep)
+            means, stds = target_decoder_con.forward(obs, hybrid_action)
 
         dist_dis = Categorical(logits=logits)
         act_logp_dis = dist_dis.log_prob(act_dis_exec)[agent_to_update == 1]
@@ -425,13 +461,3 @@ class MultiAgentTransformer(nn.Module):
         entropy_con = dist_con.entropy()[agent_to_update == 1]
 
         return act_logp_dis, entropy_dis, act_logp_con, entropy_con
-
-# if __name__ == "__main__":
-#     act_dis_exec = torch.zeros((1, 20), dtype=torch.long, device=torch.device('cuda'))
-#     act_con_exec = torch.zeros((1, 20), device=torch.device('cuda')) + 15
-#     agent_to_update = torch.ones((1, 20), device=torch.device('cuda'))
-#     decoder = Decoder(8, 128, 1, 8, 20, [0.01, 0.6]).to(torch.device('cuda'))
-#     obs_rep = torch.randn((1, 20, 128), device=torch.device('cuda'))
-#     res = decoder.parallel_act(obs_rep, act_dis_exec, act_con_exec, agent_to_update)
-#     g = make_dot(res)
-#     g.view()

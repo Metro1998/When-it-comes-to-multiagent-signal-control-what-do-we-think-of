@@ -26,7 +26,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=512, help='Batch size.')
     parser.add_argument('--entropy_coef_dis', type=float, default=0.005, help='Entropy coefficient for discrete action.')
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
-    parser.add_argument('--max_grad_norm', type=float, default=5, help='Maximum gradient norm.')
+    parser.add_argument('--max_grad_norm', type=float, default=0.5, help='Maximum gradient norm.')
     parser.add_argument('--target_kl_dis', type=float, default=0.025, help='Target KL divergence for discrete action.')
     parser.add_argument('--target_kl_con', type=float, default=0.05, help='Target KL divergence for continuous action.')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')

@@ -43,9 +43,9 @@ class PPOTrainer:
         self.optimizer_actor_dis = torch.optim.Adam(self.policy_gpu.decoder_dis.parameters(), lr=args.lr_actor_dis, eps=args.adam_eps)
         self.optimizer_actor_con = torch.optim.Adam(self.policy_gpu.decoder_con.parameters(), lr=args.lr_actor_con, eps=args.adam_eps)
         self.optimizer_critic = torch.optim.Adam(self.policy_gpu.encoder.parameters(), lr=args.lr_critic, eps=args.adam_eps)
-        self.lr_scheduler_actor_dis = CosineWarmupScheduler(optimizer=self.optimizer_actor_dis, warmup=10^4, max_iters=10^5)
-        self.lr_scheduler_actor_con = CosineWarmupScheduler(optimizer=self.optimizer_actor_con, warmup=10^4, max_iters=10^5)
-        self.lr_scheduler_critic = CosineWarmupScheduler(optimizer=self.optimizer_critic, warmup=10^4, max_iters=10^5)
+        self.lr_scheduler_actor_dis = CosineWarmupScheduler(optimizer=self.optimizer_actor_dis, warmup=(10^4) / 2, max_iters=10^5)
+        self.lr_scheduler_actor_con = CosineWarmupScheduler(optimizer=self.optimizer_actor_con, warmup=(10^4) / 2, max_iters=10^5)
+        self.lr_scheduler_critic = CosineWarmupScheduler(optimizer=self.optimizer_critic, warmup=(10^4) / 2, max_iters=10^5)
         self.loss_func = nn.SmoothL1Loss(reduction='mean')
 
     def update(self):
@@ -73,7 +73,10 @@ class PPOTrainer:
 
                 # Advantage normalization
                 # In particular, this normalization happens at the minibatch level instead of the whole batch level!
-                joint_adv_batch = torch.mean(adv_batch, dim=-1, keepdim=True)
+                joint_adv_batch = torch.zeros(size=(self.batch_size, 1), dtype=torch.float32, device='cuda:0')
+                for i in range(self.batch_size):
+                    joint_adv_batch[i] = torch.mean(adv_batch[i][agent_batch[i] == 1], dim=-1, keepdim=True)
+                # joint_adv_batch = torch.mean(adv_batch, dim=-1, keepdim=True)
                 joint_adv_batch = (joint_adv_batch - joint_adv_batch.mean()) / (joint_adv_batch.std() + 1e-8)
                 joint_adv_batch = joint_adv_batch.expand(-1, self.agent_num)[agent_batch == 1]
 
