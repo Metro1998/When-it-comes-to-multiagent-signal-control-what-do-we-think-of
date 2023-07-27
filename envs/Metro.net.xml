@@ -4,29 +4,29 @@
 <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
-        <sumo-net_file-file value_proj="C:\Users\Metro\PycharmProjects\When-it-comes-to-multiagent-signal-control-what-do-we-think-of\envs\Metro.net_file.xml"/>
+        <sumo-net-file value="C:\Users\Metro\PycharmProjects\When-it-comes-to-multiagent-signal-control-what-do-we-think-of\envs\Metro.net.xml"/>
     </input>
 
     <output>
-        <output-file value_proj="C:\Users\Metro\PycharmProjects\When-it-comes-to-multiagent-signal-control-what-do-we-think-of\envs\Metro.net_file.xml"/>
+        <output-file value="C:\Users\Metro\PycharmProjects\When-it-comes-to-multiagent-signal-control-what-do-we-think-of\envs\Metro.net.xml"/>
     </output>
 
     <processing>
-        <geometry.min-radius.fix.railways value_proj="false"/>
-        <geometry.max-grade.fix value_proj="false"/>
-        <offset.disable-normalization value_proj="true"/>
-        <lefthand value_proj="0"/>
+        <geometry.min-radius.fix.railways value="false"/>
+        <geometry.max-grade.fix value="false"/>
+        <offset.disable-normalization value="true"/>
+        <lefthand value="0"/>
     </processing>
 
     <junctions>
-        <no-turnarounds value_proj="true"/>
-        <junctions.corner-detail value_proj="5"/>
-        <junctions.limit-turn-speed value_proj="5.50"/>
-        <rectangular-lane-cut value_proj="0"/>
+        <no-turnarounds value="true"/>
+        <junctions.corner-detail value="5"/>
+        <junctions.limit-turn-speed value="5.50"/>
+        <rectangular-lane-cut value="0"/>
     </junctions>
 
     <pedestrian>
-        <walkingareas value_proj="0"/>
+        <walkingareas value="0"/>
     </pedestrian>
 
 </configuration>

@@ -20,8 +20,9 @@ class PPOTrainer:
         :param args:
         """
 
-        self.policy_gpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, device='cuda:0')
-        self.policy_cpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, device='cpu')
+        self.policy_gpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, args.dropout, device='cuda:0')
+        self.policy_gpu_target = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, args.dropout, device='cuda:0')
+        self.policy_cpu = MultiAgentTransformer(args.obs_dim, args.action_dim, args.embd_dim, args.agent_num, args.block_num, args.head_num, args.std_clip, args.dropout, device='cpu')
         self.copy_parameter()
         self.buffer = PPOBuffer(3600, args.env_num, args.agent_num, args.obs_dim, args.history_len, args.gamma, args.lam)
         self.random_seed = args.random_seed
@@ -30,7 +31,7 @@ class PPOTrainer:
         self.batch_size = args.batch_size
         self.entropy_coef_dis = args.entropy_coef_dis
         self.entropy_coef_con = args.entropy_coef_con
-        self.max_grad_norm = args.max_grad_norm  # gradient clip value, is set to be 0.5 in MAT
+        self.max_grad_norm = args.max_grad_norm  # gradient clip value_proj, is set to be 0.5 in MAT
         self.target_kl_dis = args.target_kl_dis
         self.target_kl_con = args.target_kl_con
         self.gamma = args.gamma
@@ -39,34 +40,12 @@ class PPOTrainer:
         self.writer = writer
         self.global_step = 0
 
-        # args.adam_eps is set to be 1e-5, recommended by "The 37 Implementation Details of Proximal Policy Optimization"
-        # self.parameters_con = [
-        #     {'params': self.policy_gpu.decoder.action_embedding_con.parameters()},
-        #     {'params': self.policy_gpu.decoder.blocks_con.parameters()},
-        #     {'params': self.policy_gpu.decoder.head_con.parameters()},
-        #     {'params': self.policy_gpu.decoder.log_std}
-        # ]
-        self.optimizer_actor = torch.optim.Adam([
-            {'params': self.policy_gpu.decoder.action_embedding_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
-            {'params': self.policy_gpu.decoder.blocks_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
-            {'params': self.policy_gpu.decoder.head_con.parameters(), 'lr': args.lr_actor_con, 'eps': args.adam_eps},
-            {'params': self.policy_gpu.decoder.log_std, 'lr': args.lr_std, 'eps': args.adam_eps},
-            {'params': self.policy_gpu.decoder.action_embedding_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps},
-            {'params': self.policy_gpu.decoder.blocks_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps},
-            {'params': self.policy_gpu.decoder.head_dis.parameters(), 'lr': args.lr_actor_dis, 'eps': args.adam_eps},
-        ])
-        # self.parameters_dis = [
-        #     {'params': self.policy_gpu.decoder.action_embedding_dis.parameters()},
-        #     {'params': self.policy_gpu.decoder.blocks_dis.parameters()},
-        #     {'params': self.policy_gpu.decoder.head_dis.parameters()}
-        # ]
-        # self.optimizer_actor_dis = torch.optim.Adam(self.parameters_dis, lr=args.lr_actor_con, eps=args.adam_eps)
-
+        self.optimizer_actor_dis = torch.optim.Adam(self.policy_gpu.decoder_dis.parameters(), lr=args.lr_actor_dis, eps=args.adam_eps)
+        self.optimizer_actor_con = torch.optim.Adam(self.policy_gpu.decoder_con.parameters(), lr=args.lr_actor_con, eps=args.adam_eps)
         self.optimizer_critic = torch.optim.Adam(self.policy_gpu.encoder.parameters(), lr=args.lr_critic, eps=args.adam_eps)
-
-        # self.lr_scheduler_actor_con = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor, gamma=args.lr_decay_rate)
-        # self.lr_scheduler_actor_dis = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_actor_dis, gamma=args.lr_decay_rate)
-        self.lr_scheduler_critic = torch.optim.lr_scheduler.ExponentialLR(optimizer=self.optimizer_critic, gamma=args.lr_decay_rate)
+        self.lr_scheduler_actor_dis = CosineWarmupScheduler(optimizer=self.optimizer_actor_dis, warmup=10^4, max_iters=10^5)
+        self.lr_scheduler_actor_con = CosineWarmupScheduler(optimizer=self.optimizer_actor_con, warmup=10^4, max_iters=10^5)
+        self.lr_scheduler_critic = CosineWarmupScheduler(optimizer=self.optimizer_critic, warmup=10^4, max_iters=10^5)
         self.loss_func = nn.SmoothL1Loss(reduction='mean')
 
     def update(self):
@@ -107,22 +86,30 @@ class PPOTrainer:
                 torch.nn.utils.clip_grad_norm_(self.policy_gpu.encoder.parameters(), norm_type=2, max_norm=self.max_grad_norm)
                 self.optimizer_critic.step()
 
-                ### Update decoders ###
+                ### Update decoder_dis ###
+                self.optimizer_actor_dis.zero_grad()
                 new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy_gpu.evaluate_actions(
-                    obs_batch, act_dis_batch, act_con_batch, agent_batch)
+                    obs_batch, act_dis_batch, act_con_batch, agent_batch, None, self.policy_gpu_target.decoder_con)
 
-                self.optimizer_actor.zero_grad()
-
-                ## Calculate the gradient of discrete actor ##
                 imp_weights_dis = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
                 surr1_dis = imp_weights_dis * joint_adv_batch
                 surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
-                # loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.entropy_coef_dis * entropy_dis).mean()
-                loss_pi_dis = - torch.min(surr1_dis, surr2_dis).mean()
+                loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.entropy_coef_dis * entropy_dis).mean()
+                # loss_pi_dis = - torch.min(surr1_dis, surr2_dis).mean()
                 with torch.no_grad():
                     # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
                     approx_kl_dis = ((imp_weights_dis - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
+                if approx_kl_dis > self.target_kl_dis:
+                    print('Early stopping at step {} due to reaching max kl_dis.'.format(self.global_step))
+                else:
+                    loss_pi_dis.backward()
+                    torch.nn.utils.clip_grad_norm_(self.policy_gpu.decoder_dis.parameters(), norm_type=2, max_norm=self.max_grad_norm)
+                    self.optimizer_actor_dis.step()
 
+                ### Update decoder_con ###
+                self.optimizer_actor_con.zero_grad()
+                new_logp_dis_batch, entropy_dis, new_logp_con_batch, entropy_con = self.policy_gpu.evaluate_actions(
+                    obs_batch, act_dis_batch, act_con_batch, agent_batch, self.policy_gpu_target.decoder_dis, None)
                 imp_weights_con = torch.exp(new_logp_con_batch - old_logp_con_batch)
                 surr1_con = imp_weights_con * joint_adv_batch
                 surr2_con = torch.clamp(imp_weights_con, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
@@ -132,13 +119,12 @@ class PPOTrainer:
                 loss_pi_con = - torch.min(surr1_con, surr2_con).mean()
                 with torch.no_grad():
                     approx_kl_con = ((imp_weights_con - 1) - (new_logp_con_batch - old_logp_con_batch)).mean()
-                if approx_kl_dis > self.target_kl_dis or approx_kl_con > self.target_kl_con:
-                    print('Early stopping at step {} due to reaching max kl.'.format(_))
+                if approx_kl_con > self.target_kl_con:
+                    print('Early stopping at step {} due to reaching max kl_con.'.format(self.global_step))
                 else:
-                    loss_pi = loss_pi_dis + loss_pi_con
-                    loss_pi.backward()
-                    # [torch.nn.utils.clip_grad_norm_(_['params'], norm_type=2, max_norm=self.max_grad_norm) for _ in self.parameters_dis]
-                    self.optimizer_actor.step()
+                    loss_pi_con.backward()
+                    torch.nn.utils.clip_grad_norm_(self.policy_gpu.decoder_con.parameters(), norm_type=2, max_norm=self.max_grad_norm)
+                    self.optimizer_actor_con.step()
 
                 self.writer.add_scalar('loss/critic', critic_loss, self.global_step)
                 self.writer.add_scalars('loss/actor', {'discrete_head': loss_pi_dis, 'continuous_head': loss_pi_con}, self.global_step)
@@ -147,15 +133,15 @@ class PPOTrainer:
                 self.writer.flush()
                 self.global_step += 1
 
-        # self.lr_scheduler_actor_con.step()
-        # self.lr_scheduler_actor_dis.step()
-        # self.lr_scheduler_critic.step()
+                self.lr_scheduler_actor_con.step()
+                self.lr_scheduler_actor_dis.step()
+                self.lr_scheduler_critic.step()
         self.copy_parameter()
 
     # def recompute(self, observation, reward, end_idx):
     #     """
-    #     Trick[0], recompute the value prediction when calculate the advantage
-    #     Compute advantage function A(s, a) based on global V-value network with GAE, where a represents joint action
+    #     Trick[0], recompute the value_proj prediction when calculate the advantage
+    #     Compute advantage function A(s, a) based on global V-value_proj network with GAE, where a represents joint action
     #
     #     :param observation:
     #     :param reward:
@@ -164,14 +150,14 @@ class PPOTrainer:
     #     """
     #     # TODO: policy_gpu
     #     # (num_steps, num_agents, obs_dim) --> (num_steps)
-    #     value = self.policy.encoder(check(observation)).squeeze().detach().numpy()
+    #     value_proj = self.policy.encoder(check(observation)).squeeze().detach().numpy()
     #     # (num_steps, num_agents) --> (num_steps)
     #     reward = np.sum(reward, axis=-1)
     #
     #     advantage = np.array([])
     #     return_ = np.array([])
     #     for j in range(len(end_idx) - 1):
-    #         val = np.array(value[end_idx[j], end_idx[j + 1]] + [0])
+    #         val = np.array(value_proj[end_idx[j], end_idx[j + 1]] + [0])
     #         rew = np.array(reward[end_idx[j], end_idx[j + 1]] + [0])
     #
     #         # the next two lines implement GAE-Lambda advantage calculation
@@ -193,5 +179,7 @@ class PPOTrainer:
     def copy_parameter(self):
         source_params = torch.nn.utils.parameters_to_vector(self.policy_gpu.parameters())
         torch.nn.utils.vector_to_parameters(source_params.cpu(), self.policy_cpu.parameters())
+        source_params = torch.nn.utils.parameters_to_vector(self.policy_gpu.parameters())
+        torch.nn.utils.vector_to_parameters(source_params, self.policy_gpu_target.parameters())
 
 

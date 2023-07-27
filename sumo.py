@@ -806,7 +806,7 @@ class SumoEnvironment(gym.Env):
         phase = int(np.where(state[: self.traffic_signals[ts_id].num_green_phases] == 1)[0])
         min_green = state[self.traffic_signals[ts_id].num_green_phases]
         density_queue = [self._discretize_density(d) for d in state[self.traffic_signals[ts_id].num_green_phases + 1 :]]
-        # tuples are hashable and can be used as key in python dictionary
+        # tuples are hashable and can be used as key_proj in python dictionary
         return tuple([phase, min_green] + density_queue)
 
     def _discretize_density(self, density):

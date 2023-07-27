@@ -326,7 +326,7 @@ class HAPPO:
 
     def recompute(self, cent_obs_buf, rew_buf):
         """
-        Compute advantage function A(s, a) based on global V-value network with GAE, where a represent joint action
+        Compute advantage function A(s, a) based on global V-value_proj network with GAE, where a represent joint action
 
         :param cent_obs_buf:
         :param rew_buf:
@@ -379,7 +379,7 @@ class HAPPO:
             rew = rew_buf[i]
 
             state = np.append(state, cent_obs[:-1])
-            # the next line computes rewards-to-go, to be targets for the value function
+            # the next line computes rewards-to-go, to be targets for the value_proj function
             ret = np.append(ret, discount_cumsum(rew, self.gamma)[:-1])
 
         return obs_queue_dic, obs_signal_dic, act_dis_dic, act_con_dic, old_logp_dis_dic, old_logp_con_dic, state, ret

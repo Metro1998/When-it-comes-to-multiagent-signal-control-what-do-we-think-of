@@ -16,11 +16,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--obs_dim', type=int, default=8, help='Observation dimension.')  # 观测空间维度
     parser.add_argument('--action_dim', type=int, default=8, help='Action dimension.')  # 动作空间维度
-    parser.add_argument('--embd_dim', type=int, default=128, help='Embedding dimension.')  # 嵌入维度
-    parser.add_argument('--agent_num', type=int, default=20, help='Number of agents.')  # 代理数量
-    parser.add_argument('--block_num', type=int, default=2, help='Number of transformer blocks.')  # Transformer块数量
+    parser.add_argument('--embd_dim', type=int, default=64, help='Embedding dimension.')  # 嵌入维度
+    parser.add_argument('--agent_num', type=int, default=7, help='Number of agents.')  # 代理数量
+    parser.add_argument('--block_num', type=int, default=1, help='Number of transformer blocks.')  # Transformer块数量
     parser.add_argument('--head_num', type=int, default=8, help='Number of attention heads.')  # 注意力头数量
-    parser.add_argument('--std_clip', type=float, default=[0.1, 0.3], help='Standard deviation clip value.')  # 标准差剪裁值
+    parser.add_argument('--std_clip', type=float, default=[0.1, 0.3], help='Standard deviation clip value_proj.')  # 标准差剪裁值
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--clip_ratio', type=float, default=0.2, help='Clip ratio.')
     parser.add_argument('--batch_size', type=int, default=512, help='Batch size.')
@@ -28,17 +28,18 @@ if __name__ == '__main__':
     parser.add_argument('--entropy_coef_con', type=float, default=0.005, help='Entropy coefficient for continuous action.')
     parser.add_argument('--max_grad_norm', type=float, default=5, help='Maximum gradient norm.')
     parser.add_argument('--target_kl_dis', type=float, default=0.025, help='Target KL divergence for discrete action.')
-    parser.add_argument('--target_kl_con', type=float, default=0.075, help='Target KL divergence for continuous action.')
+    parser.add_argument('--target_kl_con', type=float, default=0.05, help='Target KL divergence for continuous action.')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor.')
-    parser.add_argument('--lam', type=float, default=0.9, help='Lambda parameter for GAE.')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs.')
+    parser.add_argument('--lam', type=float, default=0.85, help='Lambda parameter for GAE.')
+    parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs.')
     parser.add_argument('--comment', type=str, default='_test', help='Comment for tensorboard.')
+    parser.add_argument('--dropout', type=float, default=0.01, help='Dropout rate.')
 
     # 添加Adam优化器参数
     parser.add_argument('--lr_actor_con', type=float, default=0.0003, help='Learning rate for continuous actor.')
     parser.add_argument('--lr_std', type=float, default=0.005, help='Learning rate for std deviation.')
     parser.add_argument('--lr_actor_dis', type=float, default=0.0003, help='Learning rate for discrete actor.')
-    parser.add_argument('--adam_eps', type=float, default=1e-5, help='Epsilon value for Adam optimizer.')
+    parser.add_argument('--adam_eps', type=float, default=1e-5, help='Epsilon value_proj for Adam optimizer.')
     parser.add_argument('--lr_decay_rate', type=float, default=0.005, help='Learning rate decay rate.')
     parser.add_argument('--lr_critic', type=float, default=0.001, help='Learning rate for critic.')
 
@@ -63,7 +64,7 @@ if __name__ == '__main__':
     """ ALGORITHM PARAMETERS """
     gamma = 0.99
     batch_size = 256
-    agent_num = 20
+    agent_num = 7
     total_episodes = 500
     history_len = 5
     obs_dim = 8
@@ -76,10 +77,10 @@ if __name__ == '__main__':
     yellow = 3
     stage_num = 8
     env_num = 6
-    local_net_file = 'envs/roadnet.net.xml'
-    local_route_file = 'envs/roadnet.rou.xml'
-    local_addition_file = 'envs/roadnet.add.xml'
-    max_episode_step = 800
+    local_net_file = 'envs/Metro.net.xml'
+    local_route_file = 'envs/Metro.rou.xml'
+    local_addition_file = 'envs/Metro.add.xml'
+    max_episode_step = 3800
     max_sample_step = 10000
     pattern = 'queue'
     env = gym.vector.AsyncVectorEnv([
@@ -111,8 +112,8 @@ if __name__ == '__main__':
     stat = np.zeros((5, 5000, env_num, agent_num, obs_dim), dtype=np.float32)
     roll_win = 0
     stat_ptrs = np.zeros(5, dtype=np.int32)
-
     mean, std = np.zeros(env_num, ), np.ones(env_num, )
+    mapping = mapping(10, 30)
     # """ TRAINING LOGIC """
     for episode in range(total_episodes):
         test_st = time.time()
@@ -142,10 +143,10 @@ if __name__ == '__main__':
 
             # Get action from the agent
             # st = time.time()
-            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=act_con_infer, agent_to_update=agent_to_update)
+            act_dis, logp_dis, act_con, logp_con, value = trainer.policy_cpu.act(obs_rnn, act_dis_infer=act_dis_infer, act_con_infer=mapping.norm(act_con_infer), agent_to_update=agent_to_update)
             # print('act time: ', time.time() - st)
             # Execute the environment and log data
-            action = {'duration': np.around(act_con).astype(np.int32), 'stage': act_dis}
+            action = {'duration': np.around(mapping.anorm(act_con)).astype(np.int32), 'stage': act_dis}
             # st = time.time()
             next_obs, reward, _, _, info = env.step(action)
             # print('env step time: ', time.time() - st)

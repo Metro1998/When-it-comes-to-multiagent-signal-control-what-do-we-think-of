@@ -6,7 +6,7 @@ import torch.nn as nn
 from torchviz import make_dot
 
 from torch.nn import functional as F
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 from utils.util import *
 
 """
@@ -56,32 +56,29 @@ class MultiHeadAttention(nn.Module):
         assert embd_dim % head_num == 0
         self.masked = masked
         self.head_num = head_num
+
         # key, query, value projections for all heads
-        self.key = init_(nn.Linear(embd_dim, embd_dim))
-        self.query = init_(nn.Linear(embd_dim, embd_dim))
-        self.value = init_(nn.Linear(embd_dim, embd_dim))
+        self.key_proj = init_(nn.Linear(embd_dim, embd_dim))
+        self.query_proj = init_(nn.Linear(embd_dim, embd_dim))
+        self.value_proj = init_(nn.Linear(embd_dim, embd_dim))
         # output projection
-        self.proj = init_(nn.Linear(embd_dim, embd_dim))
-        # if self.masked:
-        # causal mask to ensure that attention is only applied to the left in the input sequence
+        self.out_proj = init_(nn.Linear(embd_dim, embd_dim))
+
+        # if self.masked, causal mask to ensure that attention is only applied to the left in the input sequence
         self.register_buffer("mask", torch.tril(torch.ones(agent_num + 1, agent_num + 1))
                              .view(1, 1, agent_num + 1, agent_num + 1))
-
-        self.att_bp = None
 
     def forward(self, key, value, query):
         # B: batch_size, L: seq_len, D: embd_dim
         B, L, D = query.size()
 
-        # calculate query, key, values for all heads in batch and move head evaluate_actions to be the batch dim
-        k = self.key(key).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
-        q = self.query(query).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
-        v = self.value(value).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
+        # calculate query, key, value for all heads in batch and move head evaluate_actions to be the batch dim
+        k = self.key_proj(key).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
+        q = self.query_proj(query).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
+        v = self.value_proj(value).view(B, L, self.head_num, D // self.head_num).transpose(1, 2)  # (B, nh, L, hs)
 
         # causal attention: (B, nh, L, hs) x (B, nh, hs, L) -> (B, nh, L, L)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-
-        # self.att_bp = F.softmax(att, dim=-1)
 
         if self.masked:
             att = att.masked_fill(self.mask[:, :, :L, :L] == 0, float('-inf'))
@@ -91,14 +88,14 @@ class MultiHeadAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(B, L, D)  # re-assemble all head outputs side by side
 
         # output projection
-        y = self.proj(y)
+        y = self.out_proj(y)
         return y
 
 
 class EncodeBlock(nn.Module):
     """ an unassuming Transformer block """
 
-    def __init__(self, embd_dim, head_num, agent_num):
+    def __init__(self, embd_dim, head_num, agent_num, dropout=0.1):
         super(EncodeBlock, self).__init__()
 
         self.ln1 = nn.LayerNorm(embd_dim)
@@ -106,21 +103,27 @@ class EncodeBlock(nn.Module):
         # self.attn = MultiHeadAttention(n_embd, n_head, n_agent, masked=True)
         self.attn = MultiHeadAttention(embd_dim, head_num, agent_num, masked=False)
         self.mlp = nn.Sequential(
-            init_(nn.Linear(embd_dim, 1 * embd_dim), activate=True),
+            init_(nn.Linear(embd_dim, 2 * embd_dim), activate=True),
             nn.GELU(),
-            init_(nn.Linear(1 * embd_dim, embd_dim))
+            init_(nn.Linear(2 * embd_dim, embd_dim))
         )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        x = self.ln1(x + self.attn(x, x, x))
-        x = self.ln2(x + self.mlp(x))
+        # Attention part
+        attn_out = self.attn(x, x, x)
+        x = self.ln1(x + self.dropout(attn_out))
+
+        # MLP part
+        linear_out = self.mlp(x)
+        x = self.ln2(x + self.dropout(linear_out))
         return x
 
 
 class DecodeBlock(nn.Module):
     """ an unassuming Transformer block """
 
-    def __init__(self, embd_dim, head_num, agent_num):
+    def __init__(self, embd_dim, head_num, agent_num, dropout=0.1):
         super(DecodeBlock, self).__init__()
 
         self.ln1 = nn.LayerNorm(embd_dim)
@@ -133,17 +136,18 @@ class DecodeBlock(nn.Module):
             nn.GELU(),
             init_(nn.Linear(1 * embd_dim, embd_dim))
         )
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, rep_encoder):
-        x = self.ln1(x + self.attn1(x, x, x))
-        x = self.ln2(rep_encoder + self.attn2(key=x, value=x, query=rep_encoder))
-        x = self.ln3(x + self.mlp(x))
+        x = self.ln1(x + self.dropout(self.attn1(x, x, x)))
+        x = self.ln2(rep_encoder + self.dropout(self.attn2(key=x, value=x, query=rep_encoder)))
+        x = self.ln3(x + self.dropout(self.mlp(x)))
         return x
 
 
 class Encoder(nn.Module):
 
-    def __init__(self, obs_dim, embd_dim, block_num, head_num, agent_num):
+    def __init__(self, obs_dim, embd_dim, block_num, head_num, agent_num, dropout=0.1):
         super(Encoder, self).__init__()
 
         self.obs_dim = obs_dim
@@ -152,19 +156,15 @@ class Encoder(nn.Module):
 
         self.GRU = GRUs(obs_dim, obs_dim, agent_num)  # we use GRU to encode the observation sequence
 
-        self.obs_embedding = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), gain=5 / 3),
-                                           nn.Tanh())  # TODO run statistics
-        self.ln = nn.LayerNorm(embd_dim)  # todo
-        self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
-
-        # There are agent_num heads, because we approximate state value of each agent separately.
-        # self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-        #                           nn.LayerNorm(embd_dim),
-        #                           init_(nn.Linear(embd_dim, 1)))
-        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5 / 3),
-                                  nn.Tanh(),
+        self.obs_encoder = nn.Sequential(init_(nn.Linear(obs_dim, embd_dim), activate=True),
+                                         nn.GELU())
+        self.ln = nn.LayerNorm(embd_dim)
+        self.blocks = nn.Sequential(*[EncodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
+                                  nn.GELU(),
+                                  nn.LayerNorm(embd_dim),
                                   init_(nn.Linear(embd_dim, 1)))
-        # (B, N, embd_dim) -> (B, N, 1) output the approximating state value of each agent (token)
+        # (B, N, embd_dim) -> (B, N, 1) output the approximating state value_proj of each agent (token)
 
     def forward(self, obs):
         """
@@ -172,75 +172,167 @@ class Encoder(nn.Module):
         :param obs: (B, N, seq_len, obs_dim)
         :return:
         """
-        # print(obs.shape)
-        # obs = self.GRU(obs)  # (B, N, embd_dim)
         obs = obs[:, :, -1, :]  # (B, N, obs_dim)
-        obs_embeddings = self.obs_embedding(obs)
+
+        obs_embeddings = self.obs_encoder(obs)
         rep = self.blocks(self.ln(obs_embeddings))
         values = self.head(rep).squeeze()
 
         return values, rep
 
 
-class Decoder(nn.Module):
+class Decoder_dis(nn.Module):
 
-    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, std_clip):
-        super(Decoder, self).__init__()
+    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, dropout=0.1):
+        super(Decoder_dis, self).__init__()
 
         self.action_dim = action_dim
         self.embd_dim = embd_dim
         self.agent_num = agent_num
 
+        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
+                                              nn.GELU())
+        self.ln = nn.LayerNorm(embd_dim)
+        self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
+                                  nn.GELU(),
+                                  nn.LayerNorm(embd_dim),
+                                  init_(nn.Linear(embd_dim, action_dim)),
+                                  nn.Softmax(dim=-1))
+
+    def forward(self, hybrid_action, obs_rep):
+        action_embeddings = self.action_embedding(hybrid_action)
+        x = self.ln(action_embeddings)
+        for block in self.blocks:
+            x = block(x, obs_rep)
+        logits = self.head(x)  # (B, N, action_dim)
+
+        return logits
+
+
+class Decoder_con(nn.Module):
+
+    def __init__(self, action_dim, embd_dim, block_num, head_num, agent_num, std_clips, dropout=0.1):
+        """
+
+        :param action_dim:
+        :param embd_dim:
+        :param block_num:
+        :param head_num:
+        :param agent_num:
+        :param std_clips: the clipping range of std
+        """
+        super(Decoder_con, self).__init__()
+
+        self.action_dim = action_dim
+        self.embd_dim = embd_dim
+        self.agent_num = agent_num
+        self.std_clips = std_clips
+
         log_std = torch.zeros(action_dim) - 1.5
         self.log_std = nn.Parameter(log_std, requires_grad=True)
 
-        # action_dim + 2 = (action + 1) + 1, where action_dim + 1 means the one_hot encoding plus the start token,
-        # and 1 indicates raw continuous parameter.
-        self.action_embedding_dis = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), gain=5 / 3),
-                                                  nn.Tanh())
-        self.action_embedding_con = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), gain=5 / 3),
-                                                  nn.Tanh())
-        # self.ln = nn.LayerNorm(embd_dim)
-        self.blocks_dis = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
-        self.blocks_con = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num) for _ in range(block_num)])
-
-        self.head_dis = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5 / 3),
-                                      nn.Tanh(),
-                                      init_(nn.Linear(embd_dim, action_dim)),
-                                      nn.Softmax(dim=-1))
-
-        # self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True), nn.GELU(),
-        #                               nn.LayerNorm(embd_dim))
-        # self.head_con = init_(nn.Linear(embd_dim, action_dim))
-        # self.fc_std = init_(nn.Linear(embd_dim, action_dim))
-
-        self.head_con = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5 / 3),
-                                      nn.Tanh(),
-                                      init_(nn.Linear(embd_dim, action_dim)))
-        # self.fc_std = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), gain=5/3),
-        #                             nn.Tanh(),
-        #                             init_(nn.Linear(embd_dim, action_dim)))
-
-        self.std_clip = std_clip
+        self.action_embedding = nn.Sequential(init_(nn.Linear(action_dim + 2, embd_dim, bias=False), activate=True),
+                                              nn.GELU())
+        self.ln = nn.LayerNorm(embd_dim)
+        self.blocks = nn.Sequential(*[DecodeBlock(embd_dim, head_num, agent_num, dropout) for _ in range(block_num)])
+        self.head = nn.Sequential(init_(nn.Linear(embd_dim, embd_dim), activate=True),
+                                  nn.GELU(),
+                                  nn.LayerNorm(embd_dim),
+                                  init_(nn.Linear(embd_dim, action_dim)))
 
     def forward(self, hybrid_action, obs_rep):
-        # x = self.ln(action_embeddings)
 
-        x = self.action_embedding_dis(hybrid_action)
-        for block in self.blocks_dis:
+        action_embeddings = self.action_embedding(hybrid_action)
+        x = self.ln(action_embeddings)
+        for block in self.blocks:
             x = block(x, obs_rep)
-        logits = self.head_dis(x)  # (B, N, action_dim)
+        means = self.head(x)  # (B, N, action_dim)
+        stds = torch.clamp(F.softplus(self.log_std), self.std_clips[0], self.std_clips[1]).repeat(means.shape[0], means.shape[1], 1)
 
-        y = self.action_embedding_con(hybrid_action)
-        for block in self.blocks_con:
-            y = block(y, obs_rep)
-        means = self.head_con(y)  # (B, N, action_dim)
+        return means, stds
 
-        B, N, _ = means.size()
-        stds = torch.clamp(F.softplus(self.log_std), self.std_clip[0], self.std_clip[1]).repeat(B, N, 1)
-        print('stds', stds)
 
-        return logits, means, stds
+class MultiAgentTransformer(nn.Module):
+
+    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, std_clip, dropout, device):
+        """
+
+        :param obs_dim:
+        :param action_dim:
+        :param embd_dim:
+        :param agent_num:
+        :param block_num:
+        :param head_num:
+        :param std_clip:
+        :param device:
+        """
+        super(MultiAgentTransformer, self).__init__()
+
+        self.action_dim = action_dim
+        self.agent_num = agent_num
+        self.std_clip = std_clip
+        self.device = device
+
+        # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
+        # each other, so are they in MAT.
+        self.encoder = Encoder(obs_dim, embd_dim, block_num, head_num, agent_num, dropout)
+        self.decoder_con = Decoder_con(action_dim, embd_dim, block_num, head_num, agent_num, std_clip, dropout)
+        self.decoder_dis = Decoder_dis(action_dim, embd_dim, block_num, head_num, agent_num, dropout)
+        self.mapping = mapping(min_green=10, max_green=30)
+
+        self.to(self.device)
+
+    def evaluate_actions(self, obs, act_dis, act_con, agent_to_update, target_decoder_dis=None, target_decoder_con=None):
+        """
+        Get action logprobs / entropy for actor update.
+
+        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)  they will be preprocessed in the buffer, specifically from numpy to tensor.
+        :param act_dis: (torch.Tensor) (batch_size, agent_num)
+        :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
+        :param target_decoder_dis:
+        :param target_decoder_con:
+        :param agent_to_update:
+        :return:
+        """
+        _, obs_rep = self.encoder(obs)
+
+        act_log_dis, entropy_dis, act_log_con, entropy_con = self.parallel_act(obs_rep, act_dis, act_con, agent_to_update, target_decoder_dis, target_decoder_con)
+
+        return act_log_dis, entropy_dis, act_log_con, entropy_con
+
+    def get_values(self, obs):
+        """
+        Get value_proj function predictions.
+        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
+        :return: (torch.Tensor) value_proj function predictions
+        """
+        obs = check(obs).to(self.device)
+        values, _ = self.encoder(obs)
+
+        return values
+
+    def act(self, obs, act_dis_infer, act_con_infer, agent_to_update):
+        """
+        Compute stages and value_proj function predictions for the given inputs.
+
+        :param obs:
+        :param act_dis_infer: the last step's discrete actions, for masking the discrete action space if it time to act.
+        :param act_con_infer: the last step's continuous actions, for deciding whether to infer(map2real(act_con_infer) < 0.1) on the current step.
+        :param agent_to_update:
+        :return:
+        """
+        obs = check(obs).to(self.device)
+        act_dis_infer = check(act_dis_infer).to(self.device)
+        act_con_infer = check(act_con_infer).to(self.device)
+        agent_to_update = check(agent_to_update).to(self.device)
+
+        with torch.no_grad():
+            values, obs_rep = self.encoder(obs)
+
+        act_dis, logp_dis, act_con, logp_con = self.autoregressive_act(obs_rep, act_dis_infer, act_con_infer, agent_to_update)
+
+        return act_dis, logp_dis, act_con, logp_con, values
 
     def autoregressive_act(self, obs_rep, act_dis_infer, act_con_infer, agent_to_update):
         hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), dtype=torch.float32,
@@ -251,14 +343,11 @@ class Decoder(nn.Module):
             # For agent_i in the batch, there is at least one to update
             if agent_to_update[:, i].sum() > 0:
                 with torch.no_grad():
-                    logits, means, stds = self.forward(hybrid_action, obs_rep)
+                    logits = self.decoder_dis.forward(hybrid_action, obs_rep)
+                    means, stds = self.decoder_con.forward(hybrid_action, obs_rep)
                     logit = logits[:, i]
                     mean = means[:, i]
                     std = stds[:, i]
-
-                    # print('logit', logit[0])
-                    # print('mean', mean[0])
-                    # print('std', std[0])
 
                     agent_to_update_ = agent_to_update[:, i].bool()
 
@@ -269,7 +358,7 @@ class Decoder(nn.Module):
                     std_ = torch.gather(std, 1, act_dis_.unsqueeze(-1)).squeeze()
                     dist_con = Normal(mean_, std_)
                     act_con_raw = dist_con.sample()
-                    act_con_ = torch.where(agent_to_update_, map2real(torch.tanh(act_con_raw)),
+                    act_con_ = torch.where(agent_to_update_, self.mapping.norm(self.mapping.map2real(torch.tanh(act_con_raw))),
                                            act_con_infer[:, i].float())
 
                     act_logp_dis = torch.where(agent_to_update_, dist_dis.log_prob(act_dis_),
@@ -308,12 +397,20 @@ class Decoder(nn.Module):
         return torch.t(output_act_dis).numpy(), torch.t(output_logp_dis).numpy(), torch.t(
             output_act_con).numpy(), torch.t(output_logp_con).numpy()
 
-    def parallel_act(self, obs_rep, act_dis_exec, act_con_exec, agent_to_update):
-        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2), device=torch.device('cuda'))
+    def parallel_act(self, obs_rep, act_dis_exec, act_con_exec, agent_to_update, target_decoder_dis=None, target_decoder_con=None):
+        hybrid_action = torch.zeros((obs_rep.shape[0], self.agent_num, self.action_dim + 2),
+                                    device=torch.device('cuda'))
         hybrid_action[:, 0, 0] = 1
         hybrid_action[:, 1:, 1:-1].copy_(F.one_hot(act_dis_exec, num_classes=self.action_dim)[:, :-1, :])
         hybrid_action[:, 1:, -1] = act_con_exec[:, :-1]
-        logits, means, stds = self.forward(hybrid_action, obs_rep)
+        if target_decoder_dis is None:
+            logits = self.decoder_dis.forward(hybrid_action, obs_rep)
+        else:
+            logits = target_decoder_dis.forward(hybrid_action, obs_rep)
+        if target_decoder_con is None:
+            means, stds = self.decoder_con.forward(hybrid_action, obs_rep)
+        else:
+            means, stds = target_decoder_con.forward(hybrid_action, obs_rep)
 
         dist_dis = Categorical(logits=logits)
         act_logp_dis = dist_dis.log_prob(act_dis_exec)[agent_to_update == 1]
@@ -322,91 +419,12 @@ class Decoder(nn.Module):
         means = means.gather(-1, act_dis_exec.unsqueeze(-1)).squeeze()
         stds = stds.gather(-1, act_dis_exec.unsqueeze(-1)).squeeze()
         dist_con = Normal(means, stds)
-        act_con_ = torch.where(agent_to_update.bool(), remap(act_con_exec),
+        act_con_ = torch.where(agent_to_update.bool(), self.mapping.remap(self.mapping.anorm(act_con_exec)),
                                torch.zeros_like(act_con_exec, dtype=torch.float32, device=torch.device('cuda')))
         act_logp_con = dist_con.log_prob(act_con_)[agent_to_update == 1]
         entropy_con = dist_con.entropy()[agent_to_update == 1]
 
         return act_logp_dis, entropy_dis, act_logp_con, entropy_con
-
-
-class MultiAgentTransformer(nn.Module):
-
-    def __init__(self, obs_dim, action_dim, embd_dim, agent_num, block_num, head_num, std_clip, device):
-        """
-
-        :param obs_dim:
-        :param action_dim:
-        :param embd_dim:
-        :param agent_num:
-        :param block_num:
-        :param head_num:
-        :param std_clip:
-        :param device:
-        """
-        super(MultiAgentTransformer, self).__init__()
-
-        self.action_dim = action_dim
-        self.agent_num = agent_num
-        self.std_clip = std_clip
-        self.device = device
-
-        # In our original implementation of HPPO, the discrete and continuous actors are thought to be independent with
-        # each other, so are they in MAT.
-        self.encoder = Encoder(obs_dim, embd_dim, block_num, head_num, agent_num)
-        self.decoder = Decoder(action_dim, embd_dim, block_num, head_num, agent_num, std_clip)
-
-        self.to(self.device)
-
-    def evaluate_actions(self, obs, act_dis, act_con, agent_to_update):
-        """
-        Get action logprobs / entropy for actor update.
-
-        :param obs: (torch.Tensor) (batch_size, agent_num, obs_dim)  they will be preprocessed in the buffer, specifically from numpy to tensor.
-        :param act_dis: (torch.Tensor) (batch_size, agent_num)
-        :param act_con: (torch.Tensor) (batch_size, agent_num, action_dim)
-        :return:
-        """
-        _, obs_rep = self.encoder(obs)
-
-        act_log_dis, entropy_dis, act_log_con, entropy_con = self.decoder.parallel_act(obs_rep, act_dis, act_con, agent_to_update)
-
-        return act_log_dis, entropy_dis, act_log_con, entropy_con
-
-    def get_values(self, obs):
-        """
-        Get value function predictions.
-        :param obs: (np.ndarray) (batch_size, agent_num, obs_dim)
-        :return: (torch.Tensor) value function predictions
-        """
-        obs = check(obs).to(self.device)
-        values, _ = self.encoder(obs)
-
-        return values
-
-    def act(self, obs, act_dis_infer, act_con_infer, agent_to_update):
-        """
-        Compute stages and value function predictions for the given inputs.
-
-        :param obs:
-        :param act_dis_infer: the last step's discrete actions, for masking the discrete action space if it time to act.
-        :param act_con_infer: the last step's continuous actions, for deciding whether to infer(map2real(act_con_infer) < 0.1) on the current step.
-        :param agent_to_update:
-        :return:
-        """
-        obs = check(obs).to(self.device)
-        act_dis_infer = check(act_dis_infer).to(self.device)
-        act_con_infer = check(act_con_infer).to(self.device)
-        agent_to_update = check(agent_to_update).to(self.device)
-
-        with torch.no_grad():
-            values, obs_rep = self.encoder(obs)
-
-        act_dis, logp_dis, act_con, logp_con = self.decoder.autoregressive_act(obs_rep, act_dis_infer, act_con_infer,
-                                                                               agent_to_update)
-
-        return act_dis, logp_dis, act_con, logp_con, values
-
 
 # if __name__ == "__main__":
 #     act_dis_exec = torch.zeros((1, 20), dtype=torch.long, device=torch.device('cuda'))
