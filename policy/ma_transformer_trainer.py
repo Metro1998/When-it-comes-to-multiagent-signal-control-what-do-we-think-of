@@ -68,17 +68,17 @@ class PPOTrainer:
                 act_con_batch = sample_dic['act_con'][indices]
                 old_logp_dis_batch = sample_dic['logp_dis'][indices][agent_batch == 1]
                 old_logp_con_batch = sample_dic['logp_con'][indices][agent_batch == 1]
-                adv_batch = sample_dic['adv'][indices]
+                adv_batch = sample_dic['adv'][indices][agent_batch == 1]
                 ret_batch = sample_dic['ret'][indices]
 
                 # Advantage normalization
                 # In particular, this normalization happens at the minibatch level instead of the whole batch level!
-                joint_adv_batch = torch.zeros(size=(self.batch_size, 1), dtype=torch.float32, device='cuda:0')
-                for i in range(self.batch_size):
-                    joint_adv_batch[i] = torch.mean(adv_batch[i][agent_batch[i] == 1], dim=-1, keepdim=True)
+                # joint_adv_batch = torch.zeros(size=(self.batch_size, 1), dtype=torch.float32, device='cuda:0')
+                # for i in range(self.batch_size):
+                #     joint_adv_batch[i] = torch.mean(adv_batch[i][agent_batch[i] == 1], dim=-1, keepdim=True)
                 # joint_adv_batch = torch.mean(adv_batch, dim=-1, keepdim=True)
-                joint_adv_batch = (joint_adv_batch - joint_adv_batch.mean()) / (joint_adv_batch.std() + 1e-8)
-                joint_adv_batch = joint_adv_batch.expand(-1, self.agent_num)[agent_batch == 1]
+                joint_adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std() + 1e-8)
+                # adv = joint_adv_batch.expand(-1, self.agent_num)[agent_batch == 1]
 
                 ### Update encoder ###
                 ## Calculate the gradient of critic ##
@@ -97,8 +97,8 @@ class PPOTrainer:
                 imp_weights_dis = torch.exp(new_logp_dis_batch - old_logp_dis_batch)
                 surr1_dis = imp_weights_dis * joint_adv_batch
                 surr2_dis = torch.clamp(imp_weights_dis, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio) * joint_adv_batch
-                loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.entropy_coef_dis * entropy_dis).mean()
-                # loss_pi_dis = - torch.min(surr1_dis, surr2_dis).mean()
+                # loss_pi_dis = - (torch.min(surr1_dis, surr2_dis) + self.entropy_coef_dis * entropy_dis).mean()
+                loss_pi_dis = - torch.min(surr1_dis, surr2_dis).mean()
                 with torch.no_grad():
                     # Trick, calculate approx_kl http://joschu.net/blog/kl-approx.html
                     approx_kl_dis = ((imp_weights_dis - 1) - (new_logp_dis_batch - old_logp_dis_batch)).mean()
@@ -141,35 +141,8 @@ class PPOTrainer:
                 self.lr_scheduler_critic.step()
         self.copy_parameter()
 
-    # def recompute(self, observation, reward, end_idx):
-    #     """
-    #     Trick[0], recompute the value_proj prediction when calculate the advantage
-    #     Compute advantage function A(s, a) based on global V-value_proj network with GAE, where a represents joint action
-    #
-    #     :param observation:
-    #     :param reward:
-    #     :param end_idx:
-    #     :return:
-    #     """
-    #     # TODO: policy_gpu
-    #     # (num_steps, num_agents, obs_dim) --> (num_steps)
-    #     value_proj = self.policy.encoder(check(observation)).squeeze().detach().numpy()
-    #     # (num_steps, num_agents) --> (num_steps)
-    #     reward = np.sum(reward, axis=-1)
-    #
-    #     advantage = np.array([])
-    #     return_ = np.array([])
-    #     for j in range(len(end_idx) - 1):
-    #         val = np.array(value_proj[end_idx[j], end_idx[j + 1]] + [0])
-    #         rew = np.array(reward[end_idx[j], end_idx[j + 1]] + [0])
-    #
-    #         # the next two lines implement GAE-Lambda advantage calculation
-    #         delta = rew[:-1] + self.gamma * val[1:] - val[:-1]
-    #         advantage = np.append(advantage, discount_cumsum(delta, self.gamma * self.lam))
-    #         # The return is repeatedly calculated actually
-    #         return_ = np.append(return_, discount_cumsum(rew, self.gamma)[:-1])
-    #
-    #     return advantage, return_
+    def finish_path(self, critical_step_idx):
+        self.buffer.finish_path(critical_step_idx)
 
     def save(self, save_dir, episode):
         torch.save(self.policy_gpu.state_dict(), str(save_dir) + "/MAT_GPU_" + str(episode) + ".pt")

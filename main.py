@@ -51,9 +51,9 @@ if __name__ == '__main__':
     parser.add_argument('--yellow', type=int, default=3, help='Duration of yellow phase in seconds.')
     parser.add_argument('--stage_num', type=int, default=8, help='Number of stages in the traffic signal.')
     parser.add_argument('--env_num', type=int, default=6, help='Number of parallel environments.')
-    parser.add_argument('--local_net_file', type=str, default='envs/roadnet.net.xml', help='Path to local net file.')
-    parser.add_argument('--local_route_file', type=str, default='envs/roadnet.rou.xml', help='Path to local route file.')
-    parser.add_argument('--local_addition_file', type=str, default='envs/roadnet.add.xml', help='Path to local addition file.')
+    parser.add_argument('--local_net_file', type=str, default='envs/Metro.net.xml', help='Path to local net file.')
+    parser.add_argument('--local_route_file', type=str, default='envs/Metro.rou.xml', help='Path to local route file.')
+    parser.add_argument('--local_addition_file', type=str, default='envs/Metro.add.xml', help='Path to local addition file.')
     # parser.add_argument('--max_episode_step', type=int, default=4800, help='Maximum steps per episode.')
     # parser.add_argument('--max_sample_step', type=int, default=3600, help='Maximum steps per sample.')
 
@@ -82,11 +82,11 @@ if __name__ == '__main__':
     local_addition_file = 'envs/Metro.add.xml'
     max_episode_step = 3800
     max_sample_step = 10000
-    pattern = 'queue'
+    pattern = 'pressure'
     env = gym.vector.AsyncVectorEnv([
         lambda i=i: gym.make('sumo-rl-v1',
-                             yellow=[yellow] * agent_num,
-                             num_agent=agent_num,
+                             yellow=[args.yellow] * args.agent_num,
+                             num_agent=args.agent_num,
                              use_gui=False,
                              net_file=local_net_file,
                              route_file=local_route_file,
@@ -172,7 +172,7 @@ if __name__ == '__main__':
                     print('---------------------------------------Just for the statistics')
                 else:
                     critical_step_idx = [info['critical_step_idx'][i] for i in range(env_num)]
-                    trainer.buffer.finish_path(critical_step_idx=critical_step_idx)
+                    trainer.finish_path(critical_step_idx=critical_step_idx)
                     trainer.update()
                     print('---------------------------------------Test time: ', time.time() - test_st)
                     writer.add_scalar('episode_reward', queue / episode_step, episode)

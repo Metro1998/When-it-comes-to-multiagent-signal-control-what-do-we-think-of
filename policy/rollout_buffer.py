@@ -90,8 +90,6 @@ class PPOBuffer:
                     val_tra = np.insert(value_[i][j][val_idx], 0, value_[i][j][k])
                     delta = rew_tra + self.gamma * val_tra[1:] - val_tra[:-1]
                     self.adv_buf[self.path_start_idx + k][i][j] = discount_cumsum(delta, self.gamma * self.lam)[0]
-                    # self.ret_buf[self.path_start_idx + k][i][j] = self.adv_buf[self.path_start_idx + k][i][j] + \
-                    #                                               value_[i][j][k]
                     self.ret_buf[self.path_start_idx + k][i][j] = discount_cumsum(rew_tra, self.gamma)[0]
         print('SUCCESS!')
         self.path_start_idx += end_idx
